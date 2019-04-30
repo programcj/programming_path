@@ -1,0 +1,9 @@
+gdb mi接口
+gdb --interpreter mi [exec_file]
+gdb --interpreter=mi
+
+-exec info registers
+-file-exec-file ./gettimeofday_test.exe
+-exec-run
+gdb -q -i mi gettimeofday_test.exe
+-break-insert main
