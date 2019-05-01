@@ -269,6 +269,7 @@ int http_post(const char *url, const char *args) {
 	}
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _http_to_context); //对返回的数据进行操作的函数地址
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &data); //这是write_data的第四个参数值
+	
 	curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, _http_to_header);
 	curl_easy_setopt(curl, CURLOPT_HEADERDATA, &data);
 

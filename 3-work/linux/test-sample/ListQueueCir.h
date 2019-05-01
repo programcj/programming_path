@@ -10,51 +10,108 @@
 
 #include "pthread.h"
 
-#define PTRSIZE 8
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-typedef union {
-	void *vptr;
-	char *vstr;
+#ifndef __WORDSIZE
 
-#if PTRSIZE==4
-	unsigned int valueInt;
-#elif PTRSIZE==8
-	unsigned long vint;
+#ifdef __x86_64__
+#define __WORDSIZE 64
+#else
+#define __WORDSIZE 32
+#endif
+
+#endif
+
+#define PTRSIZE __WORDSIZE
+
+//其实就是指针
+typedef union CLangPointer {
+    void* vptr;
+    char* vstr;
+
+#if PTRSIZE == 32
+    unsigned int vinteger;
+#elif PTRSIZE == 64
+    unsigned long vinteger;
 #endif
 
 } ListQueueCirDataPtr;
 
+#define CPOINT(p,dptr) memcpy(&p,&dptr, 8);
+#define CPOINT_FROM(dptr)	(*(long*)&dptr)
+
+//void *ptr="hello";
+//ListQueueCirDataPtr v;
+//CPointTo(&ptr,&v);
+inline static void CPointTo(void* ptr, ListQueueCirDataPtr* v)
+{
+	//v->vptr=ptr;
+	memcpy(v, &ptr, sizeof(ptr));
+}
+
+inline static void *CPointFrom(ListQueueCirDataPtr *v){
+	return v->vptr;
+}
 
 typedef struct _ListQueueCirItem {
-	ListQueueCirDataPtr data;
-	int dlen;
+    ListQueueCirDataPtr data;
+    int dlen;
+    void* bindData;
 } ListQueueCirItem;
 
-typedef struct _ListQueueCir
-{
-	ListQueueCirItem *datas;
-	pthread_mutex_t dataLock;
-	int front;    //start item
-	int rear;  //next item
-	int maxSize;
-	int length;
-	//sem
-	//pthread_mutex_t mutex;
-	//pthread_cond_t cond;
+typedef struct _ListQueueCir {
+    ListQueueCirItem* datas;
+    pthread_mutex_t dataLock;
+    int front; //start item
+    int rear; //next item
+    int maxSize;
+    int length;
+    //sem
+
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
 } ListQueueCir;
 
-ListQueueCir *ListQueueCir_New(int maxSize);
+ListQueueCir* ListQueueCir_New(int maxSize);
 
-void ListQueueCir_Delete(ListQueueCir *queue);
+void ListQueueCir_Delete(ListQueueCir* queue);
 
-int ListQueueCir_Add(ListQueueCir *queue, void *data, int dlen);
+ListQueueCirItem* ListQueueCir_Add(ListQueueCir* queue, void* data, int dlen,
+    void* bindData);
 
-int ListQueueCir_Add2(ListQueueCir *queue, void *data, int dlen, int sigflg);
+ListQueueCirItem* ListQueueCir_Add2(ListQueueCir* queue, void* data, int dlen,
+    void* bindData, int sigflg);
 
-ListQueueCirItem *ListQueueCir_PopItem(ListQueueCir *queue);
+//多线程有问题(相同的值)
+const ListQueueCirItem* ListQueueCir_PopItem(ListQueueCir* queue);
 
-ListQueueCirDataPtr *ListQueueCir_Pop(ListQueueCir *queue);
+//多线程有问题(相同的值)
+void* ListQueueCir_Pop(ListQueueCir* queue);
 
-int ListQueueCir_length(ListQueueCir *queue);
+//多线程无问题
+int ListQueueCir_PopTo(ListQueueCir* queue,
+    int (*bkfun)(const ListQueueCirItem* item, void* context),
+    void* context);
+
+//多线程有问题(相同的值)
+const ListQueueCirItem* ListQueueCir_GetFirst(ListQueueCir* queue);
+
+int ListQueueCir_length(ListQueueCir* queue);
+
+int ListQueueCir_isFull(ListQueueCir* queue);
+
+int ListQueueCir_timeWait(ListQueueCir* queue, int sec);
+
+//锁住queue
+int ListQueueCir_lock(ListQueueCir* queue);
+
+//解锁锁住queue
+int ListQueueCir_unlock(ListQueueCir* queue);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SRC_PLUGINS_LIBSMARTIPC_TVT_LISTQUEUECIR_H_ */

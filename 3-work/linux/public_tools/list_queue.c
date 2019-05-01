@@ -92,6 +92,7 @@ int sem_wait_ms(sem_t *sem, int ms) {
 		rc=-1;
 		errno=ETIMEDOUT;
 	}
+
 	return rc;
 }
 
@@ -124,7 +125,8 @@ int list_queue_timedwait(struct list_queue *queue, int seconds) {
 
 	ts.tv_sec += seconds;
 	ts.tv_nsec = 0;
-
+	
+	//会被信号中断,修改系统时间会有影响
 	return sem_timedwait(&queue->sem, &ts); //会被信号中断
 }
 

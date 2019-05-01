@@ -29,6 +29,12 @@ struct list_queue
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
 
+	pthread_condattr_t attr;
+
+	pthread_condattr_init(&attr);
+	pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+	pthread_cond_init(&cond, &attr);
+
 	pthread_mutex_lock(&mutex);/*锁住互斥量*/
 	//pthread_cond_broadcast(&cond);
 	pthread_cond_signal(&cond);/*条件改变，发送信号，通知t_b进程*/ 
@@ -38,6 +44,13 @@ struct list_queue
 	pthread_cond_wait(&cond,&mutex);/*解锁mutex，并等待cond改变*/ 
 	pthread_mutex_unlock(&mutex); 
 
+	struct timespec tv;
+	clock_gettime(CLOCK_MONOTONIC, &tv);
+	tv.tv_sec += sec;
+	pthread_mutex_lock(&mutex);/*锁住互斥量*/
+	ret = pthread_cond_timedwait(&cond, &mutex, &tv);
+	pthread_mutex_unlock(&mutex);/*解锁互斥量*/
+	
 #else
 	//有名信号量sem_open/sem_close
 	//内存信号量sem_init/sem_destroy
