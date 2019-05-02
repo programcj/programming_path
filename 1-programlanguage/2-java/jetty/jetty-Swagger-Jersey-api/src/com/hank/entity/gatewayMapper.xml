@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.hank.entity.gatewayMapper">
+
+	<select id="getGateway" parameterType="string"	resultType="com.hank.entity.GatewayInfo" useCache="false">
+		select * from GatewayInfo where sn=#{id}
+	</select>
+		
+	<select id="getGateways" parameterType="int" resultType="com.hank.entity.GatewayInfo" useCache="false">
+		SELECT * FROM GatewayInfo ORDER BY sn ASC
+	</select>
+	
+	<select id="count" resultType="java.lang.Integer">
+		select count(*) FROM GatewayInfo
+	</select>
+
+</mapper>
