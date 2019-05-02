@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <execinfo.h>
 
+//gcc -rdynamic
 void dump(void)
 {
 #define BACKTRACE_SIZE 50
