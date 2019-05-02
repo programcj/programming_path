@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Fun45sbdj</class>
+ <widget class="QDialog" name="Fun45sbdj">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>480</height>
+   </rect>
+  </property>
+  <property name="font">
+   <font>
+    <pointsize>12</pointsize>
+   </font>
+  </property>
+  <property name="windowTitle">
+   <string>Dialog</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QDialog {	
+	border-image: url(:/rc/res/main_bk.png) 0 00 0 0 repeat;
+}
+#widget_2{ 
+border-image: url(:/rc/res/main_bk.png) 50 00 0 0 repeat;
+}
+QPushButton {
+	border: 1px solid  rgb(0, 0, 0);
+	border-radius: 10px;
+	background-color: qlineargradient(spread:pad, x1:1, y1:1, x2:1, y2:0, stop:0.505682 rgba(35, 97, 222, 247), stop:0.539773 rgba(61, 114, 223, 247), stop:1 rgba(93, 142, 239, 238));
+	color: rgb(255, 255, 255);
+	font: 16px;
+}
+QGroupBox::title {
+  color: rgb(255, 255, 255);
+  subcontrol-origin: margin;
+  subcontrol-position: top center;
+  padding-top: 10px;  
+  border-top: 1px solid rgb(255, 255, 255);
+  font:bold 14px;
+}
+QGroupBox {
+	border: 1px solid rgb(255, 255, 255); 
+    border-radius: 9px;
+	padding:2px; font: bold 16px;	
+	background-color: rgba(199, 199, 199, 100);
+}
+
+QTableWidget::item {
+   
+}
+QHeaderView::section {
+    background-color:  rgb(221, 221, 221); 
+	font: 18px;
+	border: 0px solid #6c6c6c;
+	height: 25px;
+}
+
+QTableWidget {
+border-left: 1px solid rgb(255, 255, 255); 
+border-right: 1px solid rgb(255, 255, 255); 
+background-color: transparent;
+color: rgb(255, 255, 255);
+font: bold 14px;
+border-bottom-left-radius:10px;
+border-bottom-right-radius:10px;
+}</string>
+  </property>
+  <widget class="QWidget" name="widget_2" native="true">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>50</y>
+     <width>800</width>
+     <height>431</height>
+    </rect>
+   </property>
+   <property name="styleSheet">
+    <string notr="true"/>
+   </property>
+   <widget class="QGroupBox" name="groupBox_2">
+    <property name="geometry">
+     <rect>
+      <x>240</x>
+      <y>10</y>
+      <width>551</width>
+      <height>411</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>点检选项</string>
+    </property>
+    <widget class="QTableWidget" name="tableWidget">
+     <property name="geometry">
+      <rect>
+       <x>0</x>
+       <y>40</y>
+       <width>551</width>
+       <height>371</height>
+      </rect>
+     </property>
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <property name="selectionMode">
+      <enum>QAbstractItemView::SingleSelection</enum>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectRows</enum>
+     </property>
+     <property name="rowCount">
+      <number>1</number>
+     </property>
+     <property name="columnCount">
+      <number>2</number>
+     </property>
+     <attribute name="horizontalHeaderDefaultSectionSize">
+      <number>209</number>
+     </attribute>
+     <attribute name="horizontalHeaderStretchLastSection">
+      <bool>true</bool>
+     </attribute>
+     <row/>
+     <column>
+      <property name="text">
+       <string>点检项</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>点检结果</string>
+      </property>
+     </column>
+    </widget>
+   </widget>
+   <widget class="QGroupBox" name="groupBox">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>10</y>
+      <width>211</width>
+      <height>91</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>类型选择</string>
+    </property>
+    <widget class="QComboBox" name="comboBox">
+     <property name="geometry">
+      <rect>
+       <x>10</x>
+       <y>40</y>
+       <width>191</width>
+       <height>41</height>
+      </rect>
+     </property>
+     <item>
+      <property name="text">
+       <string>机器</string>
+      </property>
+     </item>
+     <item>
+      <property name="text">
+       <string>模具</string>
+      </property>
+     </item>
+    </widget>
+   </widget>
+   <widget class="QPushButton" name="btSave">
+    <property name="geometry">
+     <rect>
+      <x>20</x>
+      <y>200</y>
+      <width>201</width>
+      <height>61</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>保存</string>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="btExit">
+    <property name="geometry">
+     <rect>
+      <x>20</x>
+      <y>360</y>
+      <width>201</width>
+      <height>61</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>退出</string>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="btNotStart">
+    <property name="geometry">
+     <rect>
+      <x>20</x>
+      <y>280</y>
+      <width>201</width>
+      <height>61</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>未开机</string>
+    </property>
+   </widget>
+   <widget class="QLineEdit" name="lineEdit">
+    <property name="geometry">
+     <rect>
+      <x>20</x>
+      <y>140</y>
+      <width>201</width>
+      <height>41</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>-1</pointsize>
+      <weight>50</weight>
+      <italic>false</italic>
+      <bold>false</bold>
+     </font>
+    </property>
+    <property name="cursor">
+     <cursorShape>ArrowCursor</cursorShape>
+    </property>
+    <property name="styleSheet">
+     <string notr="true">border: 2px solid darkgray;
+padding-left: 80px;
+font: 18px;</string>
+    </property>
+    <property name="text">
+     <string>无</string>
+    </property>
+    <property name="readOnly">
+     <bool>true</bool>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label">
+    <property name="geometry">
+     <rect>
+      <x>33</x>
+      <y>140</y>
+      <width>51</width>
+      <height>41</height>
+     </rect>
+    </property>
+    <property name="font">
+     <font>
+      <pointsize>13</pointsize>
+     </font>
+    </property>
+    <property name="text">
+     <string>品牌:</string>
+    </property>
+   </widget>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

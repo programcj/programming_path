@@ -1,0 +1,34 @@
+<RCC>
+    <qresource prefix="/rc">
+        <file>res/logo.png</file>
+        <file>res/main_bk.png</file>
+        <file>res/main_left_menu_bk.png</file>
+        <file>res/main_left_menu_ic1.png</file>
+        <file>res/main_left_menu_ic2.png</file>
+        <file>res/main_left_menu_ic3.png</file>
+        <file>res/main_left_menu_ic4.png</file>
+        <file>res/main_left_menu_ic5.png</file>
+        <file>res/scan_ic.png</file>
+        <file>res/Server_status.png</file>
+        <file>res/Server_status_a.png</file>
+        <file>res/Server_status_ab.png</file>
+        <file>res/Server_status_b.png</file>
+        <file>res/Server_status_close.png</file>
+        <file>res/switch_off.png</file>
+        <file>res/switch_on.png</file>
+        <file>res/temperature.png</file>
+        <file>res/main_mess.png</file>
+        <file>res/temperature_gren_all.bmp</file>
+        <file>res/temperature_blu_all.bmp</file>
+        <file>res/temperature_blue.bmp</file>
+        <file>res/temperature_gren.bmp</file>
+        <file>res/WiFi_status4.png</file>
+        <file>res/WiFi_status0.png</file>
+        <file>res/WiFi_status1.png</file>
+        <file>res/WiFi_status2.png</file>
+        <file>res/WiFi_status3.png</file>
+        <file>res/main_left_bt.png</file>
+        <file>res/error.png</file>
+        <file>res/right.png</file>
+    </qresource>
+</RCC>

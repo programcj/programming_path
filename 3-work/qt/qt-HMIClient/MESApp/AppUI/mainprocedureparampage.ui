@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainProcedureParamPage</class>
+ <widget class="QWidget" name="MainProcedureParamPage">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>430</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">#MainProcedureParamPage {	
+	border-image: url(&quot;:rc/res/main_bk.png&quot;) 50 00 0 0 repeat;
+}
+#MainProcedureParamPage QGroupBox
+{
+background-color: rgba(85, 85, 127, 50);
+border-radius: 10px;
+border: 1px solid rgb(106, 163, 193);
+ font:bold 18px;
+}
+QGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top center;
+  padding-top: 5px;  
+  border-top: 1px solid rgb(106, 163, 193);
+  color: rgb(255, 255, 255);
+}
+
+QGraphicsView {
+border: 0px solid rgb(85, 85, 255);
+background-color: rgba(172, 172, 172, 100);
+}
+#listWidget{
+border: 0px solid rgb(85, 85, 255);
+background-color: rgba(172, 172, 172, 100);
+}
+
+</string>
+  </property>
+  <widget class="QGroupBox" name="groupBox">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>10</y>
+     <width>531</width>
+     <height>411</height>
+    </rect>
+   </property>
+   <property name="title">
+    <string>温度</string>
+   </property>
+   <widget class="QGraphicsView" name="graphicsView">
+    <property name="geometry">
+     <rect>
+      <x>0</x>
+      <y>30</y>
+      <width>531</width>
+      <height>381</height>
+     </rect>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+   </widget>
+  </widget>
+  <widget class="QGroupBox" name="groupBox_2">
+   <property name="geometry">
+    <rect>
+     <x>550</x>
+     <y>10</y>
+     <width>241</width>
+     <height>411</height>
+    </rect>
+   </property>
+   <property name="title">
+    <string>模次周期信息</string>
+   </property>
+   <widget class="QListWidget" name="listWidget">
+    <property name="geometry">
+     <rect>
+      <x>0</x>
+      <y>30</y>
+      <width>241</width>
+      <height>381</height>
+     </rect>
+    </property>
+    <property name="focusPolicy">
+     <enum>Qt::NoFocus</enum>
+    </property>
+    <property name="styleSheet">
+     <string notr="true"/>
+    </property>
+    <property name="verticalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="horizontalScrollBarPolicy">
+     <enum>Qt::ScrollBarAlwaysOff</enum>
+    </property>
+    <property name="editTriggers">
+     <set>QAbstractItemView::NoEditTriggers</set>
+    </property>
+    <property name="selectionMode">
+     <enum>QAbstractItemView::NoSelection</enum>
+    </property>
+   </widget>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

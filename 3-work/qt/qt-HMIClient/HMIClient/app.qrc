@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/qrc">
+        <file>res/Server_status.png</file>
+        <file>res/Server_status_close.png</file>
+        <file>res/main_bk.bmp</file>
+    </qresource>
+</RCC>

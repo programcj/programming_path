@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Fun38AdjSocketNum</class>
+ <widget class="QDialog" name="Fun38AdjSocketNum">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>800</width>
+    <height>480</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Dialog</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">#widgetBak{background-color: rgba(38, 38, 38, 200);}
+QPushButton {
+color:white;
+background:transparent;
+	background-color: qlineargradient(spread:pad, x1:1, y1:1, x2:1, y2:0, stop:0.505682 rgba(35, 97, 222, 247), stop:0.539773 rgba(61, 114, 223, 247), stop:1 rgba(93, 142, 239, 238));
+font:14px;
+
+border: 1px solid rgb(0, 0, 0); 
+}
+
+QGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top center;
+  padding-top: 10px;  
+  border-top: 1px solid rgb(255, 255, 255);
+  font:bold 14px;
+}
+QGroupBox {
+	border: 1px solid rgb(255, 255, 255); 
+    border-radius: 9px;
+	padding:2px; font: bold 16px;	
+	color: rgb(255, 255, 255);
+	background-color: rgba(218, 218, 218, 110);
+}
+QTableWidget {
+ background-color:transparent;
+ border: 4px solid transparent;
+ border-top: 0px;  
+ border-bottom-right-radius: 9px;
+ border-bottom-left-radius:9px;
+ font: 14px;
+	color: rgb(255, 255, 255);
+}
+QTableWidget::item {
+   
+}
+QHeaderView{
+ background-color:  rgb(221, 221, 221); 
+}
+QHeaderView::section {
+    background-color:  rgb(221, 221, 221); 
+	font: 14px;
+	border: 0px solid #6c6c6c;
+	height: 25px;
+	width: 20px;
+	padding-left:2px;
+}</string>
+  </property>
+  <widget class="QWidget" name="widgetBak" native="true">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>800</width>
+     <height>481</height>
+    </rect>
+   </property>
+   <property name="styleSheet">
+    <string notr="true"/>
+   </property>
+   <widget class="QGroupBox" name="groupBox">
+    <property name="geometry">
+     <rect>
+      <x>100</x>
+      <y>60</y>
+      <width>551</width>
+      <height>341</height>
+     </rect>
+    </property>
+    <property name="title">
+     <string>产品模穴信息</string>
+    </property>
+    <widget class="QPushButton" name="btSave">
+     <property name="geometry">
+      <rect>
+       <x>290</x>
+       <y>280</y>
+       <width>111</width>
+       <height>51</height>
+      </rect>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">border-top-right-radius:10px;
+border-bottom-right-radius:10px;</string>
+     </property>
+     <property name="text">
+      <string>保存</string>
+     </property>
+    </widget>
+    <widget class="QPushButton" name="btExit">
+     <property name="geometry">
+      <rect>
+       <x>170</x>
+       <y>280</y>
+       <width>121</width>
+       <height>51</height>
+      </rect>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">border-top-left-radius:10px;
+border-bottom-left-radius:10px;</string>
+     </property>
+     <property name="text">
+      <string>返回</string>
+     </property>
+    </widget>
+    <widget class="QTableWidget" name="tableWidget">
+     <property name="geometry">
+      <rect>
+       <x>5</x>
+       <y>40</y>
+       <width>541</width>
+       <height>211</height>
+      </rect>
+     </property>
+     <property name="gridStyle">
+      <enum>Qt::NoPen</enum>
+     </property>
+     <property name="rowCount">
+      <number>2</number>
+     </property>
+     <property name="columnCount">
+      <number>2</number>
+     </property>
+     <attribute name="horizontalHeaderHighlightSections">
+      <bool>false</bool>
+     </attribute>
+     <attribute name="horizontalHeaderShowSortIndicator" stdset="0">
+      <bool>true</bool>
+     </attribute>
+     <attribute name="horizontalHeaderStretchLastSection">
+      <bool>true</bool>
+     </attribute>
+     <attribute name="verticalHeaderVisible">
+      <bool>false</bool>
+     </attribute>
+     <row/>
+     <row/>
+     <column>
+      <property name="text">
+       <string>产品编号</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>模穴</string>
+      </property>
+     </column>
+    </widget>
+   </widget>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
