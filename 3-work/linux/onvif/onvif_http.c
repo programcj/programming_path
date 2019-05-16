@@ -20,15 +20,15 @@ static int http_content_point(const char* txt)
         while (*ptr) {
             if (*ptr != '\r' && *ptr != '\n') {
                 break;
-            }        
+            }
             ptr++;
         }
     }
     return ptr - txt;
 }
 
-static int http_auth_digest(const char* dsc_disget, char* resultstr, int reslen, const char* username,
-    const char* password)
+static int http_auth_digest(const char* dsc_disget, char* resultstr, int reslen,
+    const char* username, const char* password)
 {
     //https://github.com/jacketizer/libdigest
     digest_t d;
@@ -50,7 +50,8 @@ static int http_auth_digest(const char* dsc_disget, char* resultstr, int reslen,
     digest_set_attr(&d, D_ATTR_CNONCE, (digest_attr_value_t)cnonce);
 
     digest_set_attr(&d, D_ATTR_ALGORITHM, (digest_attr_value_t)1);
-    digest_set_attr(&d, D_ATTR_METHOD, (digest_attr_value_t)DIGEST_METHOD_POST);
+    digest_set_attr(&d, D_ATTR_METHOD,
+        (digest_attr_value_t)DIGEST_METHOD_POST);
 
     if (-1 == digest_client_generate_header(&d, resultstr, reslen)) {
         fprintf(stderr, "Could not build the Authorization header!\n");
@@ -74,15 +75,15 @@ static size_t _http_curl_wcontent(char* buffer, size_t size, //大小
     return size * nitems;
 }
 
-static int http_post(const char* url,
-    const char* authorization,
+static int http_post(const char* url, const char* authorization,
     const char* poststr, char* respstr, int resplen)
 {
     CURL* curl;
     CURLcode res;
     struct curl_slist* http_header = NULL;
 
-    http_header = curl_slist_append(http_header, "Content-Type: application/soap+xml; charset=utf-8");
+    http_header = curl_slist_append(http_header,
+        "Content-Type: application/soap+xml; charset=utf-8");
     if (authorization)
         http_header = curl_slist_append(http_header, authorization);
 
@@ -94,6 +95,8 @@ static int http_post(const char* url,
     }
 
     // 设置CURL参数
+	//curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
+
     curl_easy_setopt(curl, CURLOPT_URL, url); //url地址
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, http_header);
 
@@ -102,6 +105,7 @@ static int http_post(const char* url,
 
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, _http_curl_wheader); //处理http头部
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, respstr); //http头回调数据
+
     //curl_easy_setopt(curl, CURLOPT_HEADER, 1);  //将响应头信息和相应体一起传给write_data
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _http_curl_wcontent); //处理http内容
@@ -109,32 +113,38 @@ static int http_post(const char* url,
 
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, resplen - 1);
     curl_easy_setopt(curl, CURLOPT_POST, 1); //设置问非0表示本次操作为post
-    //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1);        //打印调试信息
+    //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1); //打印调试信息
 
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1); //设置为非0,响应头信息location
-    curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "/tmp/curlpost.cookie");
+    //curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1); //设置为非0,响应头信息location
+    //curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "/tmp/curlpost.cookie");
 
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L); //接收数据时超时设置，如果10秒内数据未接收完，直接退出
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L); //接收数据时超时设置，如果10秒内数据未接收完，直接退出
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0); //设为false 下面才能设置进度响应函数
 
     res = curl_easy_perform(curl);
 
     long httpcode = 0;
     // 判断是否接收成功
     if (res != CURLE_OK) { //CURLE_OK is 0
-        fprintf(stderr, "CURL err: %s,%d \n", url, res);
-    } else {
+        fprintf(stderr, "-->CURL err: %s,%d \n", url, res);
+
+		long headersize = 0;
+    	res = curl_easy_getinfo(curl, CURLINFO_HEADER_SIZE, &headersize);
         res = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpcode);
         res = httpcode;
+        printf("[headersize:%ld]res=%d\n", headersize, res);
+    }
 
-        if (httpcode == 200) {
-            int sumlen = strlen(respstr);
-            int cpoit = http_content_point(respstr);
-            if (cpoit<resplen)
-                memcpy(respstr, respstr + cpoit, resplen - cpoit);
-        }
+    res = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpcode);
+    res = httpcode;
+
+    if (httpcode == 200) {
+        int sumlen = strlen(respstr);
+        int cpoit = http_content_point(respstr);
+        if (cpoit < resplen)
+            memcpy(respstr, respstr + cpoit, resplen - cpoit);
     }
 
     // 释放CURL相关分配内存
@@ -145,11 +155,8 @@ static int http_post(const char* url,
 /**
  * onvif的http请求, return 200成功
  */
-int onvif_http_digest_post(const char* url,
-    const char* username,
-    const char* password,
-    const char* postStr,
-    char* contentText,
+int onvif_http_digest_post(const char* url, const char* username,
+    const char* password, const char* postStr, char* contentText,
     int contentTextlen)
 {
 
@@ -179,8 +186,12 @@ int onvif_http_digest_post(const char* url,
     authenticate401 = strchr(authenticate401, ':');
     if (!authenticate401)
         return -1;
+	
+	authenticate401++;
 
-    while (authenticate401 && *authenticate401 == ' ' && *authenticate401 != '\n' && *authenticate401 != '\r' && *authenticate401 != 0)
+    while (authenticate401 && *authenticate401 == ' '
+        && *authenticate401 != '\n' && *authenticate401 != '\r'
+        && *authenticate401 != 0)
         authenticate401++;
 
     ptr = authenticate401;
@@ -196,6 +207,8 @@ int onvif_http_digest_post(const char* url,
 
     int namelen = strlen("Authorization: ");
     sprintf(authorization, "Authorization: ");
+	
+	printf("authenticate401=%s\n", authenticate401);
 
     ret = http_auth_digest(authenticate401, authorization + namelen,
         sizeof(authorization) - namelen, username, password);
@@ -206,18 +219,13 @@ int onvif_http_digest_post(const char* url,
     return ret;
 }
 
-int main(int argc, char const* argv[])
+void test1()
 {
     const char* url = "http://api.fanyi.baidu.com/api/trans/vip/translate";
     const char* postStr = "q=apple&from=en&to=zh&appid=2015063000000001&salt=1435660288&sign=f89f9594663708c1605f3d736d01d2d4";
 
     char buff[1024 * 10];
     int ret = 0;
-
-    if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
-        return -1;
-    }
-
     memset(buff, 0, sizeof(buff));
 
     ret = http_post(url, NULL, postStr, buff, sizeof(buff));
@@ -232,7 +240,8 @@ int main(int argc, char const* argv[])
     char authstr[200];
 
     memset(authstr, 0, sizeof(authstr));
-    ret = http_auth_digest(digest_str, authstr, sizeof(authstr), "admin", "password");
+    ret = http_auth_digest(digest_str, authstr, sizeof(authstr), "admin",
+        "password");
 
     printf("digest_str:%s\n", digest_str);
     printf("authstr:%s\n", authstr);
@@ -242,11 +251,27 @@ int main(int argc, char const* argv[])
         const char* postStr = "<onvif></onvif>";
 
         memset(content, 0, sizeof(content));
-        ret = onvif_http_digest_post(url, "admin", "pass", postStr, content, sizeof(content) - 1);
+        ret = onvif_http_digest_post(url, "admin", "pass", postStr, content,
+            sizeof(content) - 1);
 
         printf(">>>>>>>>>>>>>>ret=%d\n", ret);
         printf("content=%s\n", content);
     }
+}
 
+int main(int argc, char const* argv[])
+{
+    if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK) {
+        return -1;
+    }
+    int ret = 0;
+    //test1();
+    char resp[1024 * 100];
+    const char* url = "http://192.168.0.150/onvif/device_service";
+    const char* GetDeviceInformationStr = "<?xml version=\"1.0\" encoding=\"utf-8\"?><s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\"><s:Body xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><GetDeviceInformation xmlns=\"http://www.onvif.org/ver10/device/wsdl\"/></s:Body></s:Envelope>";
+
+    ret = onvif_http_digest_post(url, "admin", "admin", GetDeviceInformationStr, resp,
+        sizeof(resp));
+    printf("ret=%d, %s\n", ret, resp);
     return 0;
 }
