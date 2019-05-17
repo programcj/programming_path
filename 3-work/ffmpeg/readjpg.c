@@ -154,6 +154,7 @@ void avframe_to_nv12(AVFrame* srcframe)
         frame->height); //解码
 
     av_frame_free(&frame);
+    free(out_buffer);
 }
 
 // "-lavcodec",

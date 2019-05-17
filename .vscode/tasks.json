@@ -10,7 +10,20 @@
         "-o",
         "${fileDirname}/${fileBasenameNoExtension}.exe",
         "-lcurl",
-        "-lpthread"
+        "-lpthread",
+        "-I/home/cc/ffmpeg/install/include",
+        "-L/home/cc/ffmpeg/install/lib",        
+        "-lavformat",
+        "-lavdevice",
+        "-lavfilter",
+        "-lavcodec",                  
+        "-lavutil",
+        "-lswresample",
+        "-lswscale",
+        "-lm",
+        "-lz",
+        "-lpthread",
+        "-lrt"
       ],
       "options": {
         "cwd": "/usr/bin"

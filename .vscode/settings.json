@@ -1,9 +1,13 @@
 {
+    "C_Cpp.clang_format_fallbackStyle": "WebKit",
     "files.associations": {
-        "stdio.h": "c",
-        "curl.h": "c",
-        "digest.h": "c",
-        "string.h": "c"
-    },
-    "C_Cpp.clang_format_fallbackStyle": "WebKit"
+        "unistd.h": "c",
+        "fcntl.h": "c",
+        "imgutils.h": "c",
+        "codec2utils.h": "c",
+        "prctl.h": "c",
+        "stab.h": "c",
+        "types.h": "c",
+        "stat.h": "c"
+    }
 }
