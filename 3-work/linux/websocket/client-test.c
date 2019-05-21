@@ -78,7 +78,7 @@ static int _webSockServiceCallback(struct lws *wsi,
 
 static struct lws_protocols protocols[] =
 {
-{ "myproto", _webSockServiceCallback, 0, sizeof(WebSocketClient), },
+{ "myproto", _webSockServiceCallback, sizeof(WebSocketClient),1024*100 },
 { NULL, NULL, 0, 0 } /* end */
 };
 
