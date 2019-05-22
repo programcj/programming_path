@@ -3,9 +3,47 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netdb.h>
+#include <net/if.h>
+#include <net/if_arp.h>
+
+int getifrnameip(const char* ifrname)
+{
+    int sock_get_ip;
+    char ipaddr[50];
+
+    struct sockaddr_in* sin;
+    struct ifreq ifr_ip;
+
+    if ((sock_get_ip = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        printf("socket create failse...GetLocalIp!/n");
+        return -1;
+    }
+
+    memset(&ifr_ip, 0, sizeof(ifr_ip));
+    strncpy(ifr_ip.ifr_name, ifrname, sizeof(ifr_ip.ifr_name) - 1);
+
+    if (ioctl(sock_get_ip, SIOCGIFADDR, &ifr_ip) < 0) {
+        close(sock_get_ip);
+        return -1;
+    }
+    sin = (struct sockaddr_in*)&ifr_ip.ifr_addr;
+    strcpy(ipaddr, inet_ntoa(sin->sin_addr));
+
+    printf("local ip:%s \n", ipaddr);
+    close(sock_get_ip);
+    return 0;
+}
+
 int main(int argc, char const* argv[])
 {
     struct ifaddrs* ifAddrStruct = NULL;
+
+    getifrnameip("eth0");
+    printf("====================\n");
+
     if (getifaddrs(&ifAddrStruct) != 0) {
         perror("...");
         return -1;
