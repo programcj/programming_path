@@ -31,59 +31,65 @@ static struct lws *_wsiclient = NULL;
 static WebSocketClient *_webSocketClient = NULL;
 
 static int _webSockServiceCallback(struct lws *wsi,
-		enum lws_callback_reasons reason, void *user, void *in, size_t len)
-{
+		enum lws_callback_reasons reason, void *user, void *in, size_t len) {
 	WebSocketClient *webSocketClient = (WebSocketClient*) user;
-	switch (reason)
-	{
-		case LWS_CALLBACK_PROTOCOL_INIT:
-			printf("INIT %p\n", wsi);
+	switch (reason) {
+	case LWS_CALLBACK_PROTOCOL_INIT:
+		printf("INIT %p\n", wsi);
 
 		break;
-		case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-			printf("LWS_CALLBACK_CLIENT_CONNECTION_ERROR %p\n", wsi);
+	case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
+		printf("LWS_CALLBACK_CLIENT_CONNECTION_ERROR %p\n", wsi);
 		break;
-		case LWS_CALLBACK_CLIENT_ESTABLISHED:
-			printf("LWS_CALLBACK_CLIENT_ESTABLISHED %p\n", wsi);
-			_webSocketClient = webSocketClient;
+	case LWS_CALLBACK_CLIENT_ESTABLISHED:
+		printf("LWS_CALLBACK_CLIENT_ESTABLISHED %p\n", wsi);
+		_webSocketClient = webSocketClient;
 		break;
-		case LWS_CALLBACK_CLIENT_RECEIVE:
-			printf("LWS_CALLBACK_CLIENT_RECEIVE\n");
+	case LWS_CALLBACK_CLIENT_RECEIVE:
+		printf("LWS_CALLBACK_CLIENT_RECEIVE\n");
 		break;
-		case LWS_CALLBACK_CLIENT_WRITEABLE:
-			printf("LWS_CALLBACK_CLIENT_WRITEABLE\n");
+	case LWS_CALLBACK_CLIENT_WRITEABLE:
+		printf("LWS_CALLBACK_CLIENT_WRITEABLE\n");
 		break;
-		case LWS_CALLBACK_CLOSED:
-			printf("LWS_CALLBACK_CLOSED %p \n", wsi);
+	case LWS_CALLBACK_CLOSED:
+		printf("LWS_CALLBACK_CLOSED %p \n", wsi);
 		break;
-		case LWS_CALLBACK_WSI_DESTROY:
-			printf("LWS_CALLBACK_WSI_DESTROY %p \n", wsi);
-			{
-				if (_webSocketClient == webSocketClient)
-				{
-					_webSocketClient = NULL;
-					_wsiclient = NULL;
-				}
-				if (!webSocketClient)
-				{
-
-				}
+	case LWS_CALLBACK_WSI_DESTROY:
+		printf("LWS_CALLBACK_WSI_DESTROY %p \n", wsi);
+		{
+			if (_webSocketClient == webSocketClient) {
+				_webSocketClient = NULL;
+				_wsiclient = NULL;
 			}
+			if (!webSocketClient) {
+
+			}
+		}
 		break;
-		default:
+	case LWS_CALLBACK_LOCK_POLL:
+		break;
+	case LWS_CALLBACK_UNLOCK_POLL:
+		if (webSocketClient->lastWrTime > 0) {
+			if (abs(time(NULL) - webSocketClient->lastWrTime) > 10) { //如果10秒还没发送数据,数据发送不出去
+				logd("close......\n");
+				shutdown(lws_get_socket_fd(wsi), SHUT_WR); //只能这样关闭
+				//lws_cancel_service()
+				return -1;
+			}
+		}
+		break;
+	default:
 		break;
 	}
 	return 0;
 }
 
-static struct lws_protocols protocols[] =
-{
-{ "myproto", _webSockServiceCallback, sizeof(WebSocketClient),1024*100 },
-{ NULL, NULL, 0, 0 } /* end */
+static struct lws_protocols protocols[] = { { "myproto",
+		_webSockServiceCallback, sizeof(WebSocketClient), 1024 * 100 }, { NULL,
+NULL, 0, 0 } /* end */
 };
 
-void LxWebSocketClientLoop()
-{
+void LxWebSocketClientLoop() {
 	struct lws_context_creation_info info;
 	struct lws_context *context = NULL;
 	struct lws_client_connect_info i;
@@ -120,10 +126,8 @@ void LxWebSocketClientLoop()
 
 	printf("_wsiclient=%p\n", _wsiclient);
 
-	while (1)
-	{
-		if (_wsiclient == NULL && abs(time(NULL) - tmstart) > 5)
-		{
+	while (1) {
+		if (_wsiclient == NULL && abs(time(NULL) - tmstart) > 5) {
 			printf("need restart connect ....\n");
 			tmstart = time(NULL);
 			_wsiclient = lws_client_connect_via_info(&i);
