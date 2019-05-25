@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <time.h>
 #include <sys/time.h>
@@ -95,9 +96,12 @@ void LogPrint(int level, const char *file, const char *fun, int line,
 	if (_fpout != NULL)
 	{
 		pthread_mutex_lock(&_lock);
-		fprintf(_fpout, "%s %c:%s,%s[%d]", timestr, level, file, fun, line);
-		vfprintf(_fpout, format, v);
-		fflush(_fpout);
+		if (_fpout)
+		{
+			fprintf(_fpout, "%s %c:%s,%s[%d]", timestr, level, file, fun, line);
+			vfprintf(_fpout, format, v);
+			fflush(_fpout);
+		}
 		pthread_mutex_unlock(&_lock);
 	}
 	else
@@ -110,13 +114,13 @@ void LogPrint(int level, const char *file, const char *fun, int line,
 }
 
 #ifdef LOG_SHOW_EXE
-
+//lsof -c app
 int main(const char *argc, const char **argv)
 {
 	uint8_t buff[1024];
 	int ret;
 
-	if(access(FIFO_OUT_NAME, F_OK)!=0)
+	if (access(FIFO_OUT_NAME, F_OK) != 0)
 	{
 		ret = mkfifo(FIFO_OUT_NAME, 0777);
 
@@ -140,9 +144,9 @@ int main(const char *argc, const char **argv)
 			if (rlen <= 0)
 			{
 				if (errno == EAGAIN)
-				continue;
+					continue;
 				if (errno == 0)
-				continue;
+					continue;
 
 				perror("...");
 				break;
