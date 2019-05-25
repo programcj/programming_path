@@ -54,6 +54,8 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v) {
 
 #define socket_set_keepalive(fd, flag) 	 socket_setopt(fd,SO_KEEPALIVE, flag)
 
+#define socket_send_nosignal(fd, buff)   send(fd, buff, strlen(buff), MSG_NOSIGNAL)
+
 /**
  net.ipv4.tcp_keepalive_intvl = 20
  net.ipv4.tcp_keepalive_probes = 3
