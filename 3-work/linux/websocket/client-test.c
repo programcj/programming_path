@@ -44,12 +44,14 @@ static int _webSockServiceCallback(struct lws *wsi,
 	case LWS_CALLBACK_CLIENT_ESTABLISHED:
 		printf("LWS_CALLBACK_CLIENT_ESTABLISHED %p\n", wsi);
 		_webSocketClient = webSocketClient;
+		webSocketClient->wsi = wsi;
 		break;
 	case LWS_CALLBACK_CLIENT_RECEIVE:
 		printf("LWS_CALLBACK_CLIENT_RECEIVE\n");
 		break;
 	case LWS_CALLBACK_CLIENT_WRITEABLE:
 		printf("LWS_CALLBACK_CLIENT_WRITEABLE\n");
+		_webSocketClient->lastWrTime = time(NULL);
 		break;
 	case LWS_CALLBACK_CLOSED:
 		printf("LWS_CALLBACK_CLOSED %p \n", wsi);
@@ -63,18 +65,6 @@ static int _webSockServiceCallback(struct lws *wsi,
 			}
 			if (!webSocketClient) {
 
-			}
-		}
-		break;
-	case LWS_CALLBACK_LOCK_POLL:
-		break;
-	case LWS_CALLBACK_UNLOCK_POLL:
-		if (webSocketClient->lastWrTime > 0) {
-			if (abs(time(NULL) - webSocketClient->lastWrTime) > 10) { //如果10秒还没发送数据,数据发送不出去
-				logd("close......\n");
-				shutdown(lws_get_socket_fd(wsi), SHUT_WR); //只能这样关闭
-				//lws_cancel_service()
-				return -1;
 			}
 		}
 		break;
@@ -132,6 +122,17 @@ void LxWebSocketClientLoop() {
 			tmstart = time(NULL);
 			_wsiclient = lws_client_connect_via_info(&i);
 		}
+
+		if (_webSocketClient) {
+			if (_webSocketClient->lastWrTime > 0) {
+				if (abs(time(NULL) - _webSocketClient->lastWrTime) > 10) {
+					//如果10秒还没有发送数据,则关闭
+					logd("close......\n");
+					close(lws_get_socket_fd(_webSocketClient->wsi));
+				}
+			}
+		}
+
 		lws_service(context, 200);
 	}
 
