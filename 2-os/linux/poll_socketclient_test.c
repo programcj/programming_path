@@ -90,7 +90,7 @@ int main(void) {
 			printf("send \n");
 			//ret = send(pds.fd, buff, strlen(buff), 0);
 			if (ret == 0) {
-
+				//break;
 			}
 		}
 		if (pds.revents & POLLIN) {
@@ -101,6 +101,7 @@ int main(void) {
 			if (ret == 0) {
 				close(pds.fd);
 				printf("recv err ret=%d\n", ret);
+				break;
 			}
 			printf("poll in buff=%s\n", buff);
 		}
@@ -108,9 +109,8 @@ int main(void) {
 			printf("poll POLLERR \n");
 			break;
 		}
-		if (i >= 65535) {
-			shutdown(pds.fd, SHUT_RDWR);
-			close(pds.fd);
+		if (i == 65535) {
+			shutdown(pds.fd, SHUT_RD);
 			printf("close....%d\n", pds.fd);
 		}
 	}
