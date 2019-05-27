@@ -52,6 +52,27 @@ static int _webSockServiceCallback(struct lws *wsi,
 	case LWS_CALLBACK_CLIENT_WRITEABLE:
 		printf("LWS_CALLBACK_CLIENT_WRITEABLE\n");
 		_webSocketClient->lastWrTime = time(NULL);
+
+		{
+			char data[LWS_PRE + 100] = { 0 };
+			int ret;
+
+			printf("send->\n");
+			memset(data + LWS_PRT, 'C', 100);
+			lws_set_timeout(wsi, NO_PENDING_TIMEOUT, 0);
+			ret = lws_write(wsi, (unsigned char *) (data + LWS_PRE), 100, LWS_WRITE_BINARY);
+
+			if (100 != ret) {
+				printf("lws_write waring  slen!= len\n");
+				return -1;
+			}
+
+			if (lws_send_pipe_choked(wsi)) {
+				printf("lws_send_pipe_choked  .......\n");
+				lws_set_timeout(wsi, PENDING_TIMEOUT_SENT_CLIENT_HANDSHAKE, 20);
+			}
+		}
+
 		break;
 	case LWS_CALLBACK_CLOSED:
 		printf("LWS_CALLBACK_CLOSED %p \n", wsi);
