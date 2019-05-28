@@ -143,17 +143,17 @@ void LxWebSocketClientLoop() {
 			tmstart = time(NULL);
 			_wsiclient = lws_client_connect_via_info(&i);
 		}
-
+#if 0
 		if (_webSocketClient) {
 			if (_webSocketClient->lastWrTime > 0) {
 				if (abs(time(NULL) - _webSocketClient->lastWrTime) > 10) {
 					//如果10秒还没有发送数据,则关闭
-					logd("close......\n");
-					close(lws_get_socket_fd(_webSocketClient->wsi));
+					logd("need close ......\n");
+					shutdown(lws_get_socket_fd(_webSocketClient->wsi), SHUT_RD);
 				}
 			}
 		}
-
+#endif
 		lws_service(context, 200);
 	}
 
