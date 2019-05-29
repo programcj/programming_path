@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <sys/syslog.h>
+
 //GCC标准规定必须为定义过的符号,因此，不能使用##连接字符串
 //#define LOGFRM(STR,F)	STR##F
 //openlog("mode", LOG_CONS | LOG_PID, 0);
@@ -50,23 +51,27 @@ typedef enum log_level {
 	L_HEX = 'H'
 } LOG_LEVEL;
 
+void log_setout_file(const char *file);
+
+//tcp://192.168.0.12:8080
+void log_setout_tcp(const char *ipv4str);
+
 extern int log_setlevel(int level);
 
-typedef int log_backcallfun(LOG_LEVEL level, const char *mode, const char *file,
+typedef int log_backcallfun(int level, const char *mode, const char *file,
 		const char *fun, int line, const char *fmt, va_list ap);
 
 extern void log_setbackfun(log_backcallfun *fun);
 
 extern void log_get_pthread_curname(char name[16]);
 
-extern int log_printf(LOG_LEVEL level, const char *mode, const char *file,
+extern int log_printf(int level, const char *mode, const char *file,
 		const char *fun, int line, const char *format, ...);
 
-extern int log_printf_hex(LOG_LEVEL _level, const char *file,
-		const char *function, int line, const void *data, int dlen,
-		const char *format, ...);
+extern int log_printf_hex(int _level, const char *file, const char *function,
+		int line, const void *data, int dlen, const char *format, ...);
 
-extern int log_printf2(unsigned char flag, LOG_LEVEL level, const char *file,
+extern int log_printf2(unsigned char flag, int level, const char *file,
 		const char *function, int line, const char *format, ...);
 
 #define log_i(format,...) log_printf(L_INFO,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
