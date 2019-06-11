@@ -43,12 +43,13 @@
 
 //日志极别
 typedef enum log_level {
-	L_ALL = 'A',
-	L_DEBUG = 'D',
-	L_WRING = 'W',
-	L_INFO = 'I',
-	L_ERR = 'E',
-	L_HEX = 'H'
+	CLOG_NON = 0x00,
+	CLOG_INFO = 0x01,
+	CLOG_WRING = 0x02,
+	CLOG_ERR = 0x03,
+	CLOG_DEBUG = 0x04,
+	CLOG_HEX = 0x05,
+	CLOG_ALL = 0xFF,
 } LOG_LEVEL;
 
 void log_setout_file(const char *file);
@@ -74,14 +75,14 @@ extern int log_printf_hex(int _level, const char *file, const char *function,
 extern int log_printf2(unsigned char flag, int level, const char *file,
 		const char *function, int line, const char *format, ...);
 
-#define log_i(format,...) log_printf(L_INFO,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
-#define log_d(format,...) log_printf(L_DEBUG,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
-#define log_e(format,...) log_printf(L_ERR,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
-#define log_w(format,...) log_printf(L_WRING,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
+#define log_i(format,...) log_printf(CLOG_INFO,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
+#define log_d(format,...) log_printf(CLOG_DEBUG,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
+#define log_e(format,...) log_printf(CLOG_ERR,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
+#define log_w(format,...) log_printf(CLOG_WRING,NULL,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
 
-#define log_d2(flag, format, ...)  log_printf2(flag, L_DEBUG,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
+#define log_d2(flag, format, ...)  log_printf2(flag, CLOG_DEBUG,__FILE__,__FUNCTION__,__LINE__,format, ##__VA_ARGS__)
 
-#define log_hex(data,dlen,format,...) log_printf_hex(L_HEX,__FILE__,__FUNCTION__,__LINE__,data,dlen, format, ##__VA_ARGS__)
+#define log_hex(data,dlen,format,...) log_printf_hex(CLOG_HEX,__FILE__,__FUNCTION__,__LINE__,data,dlen, format, ##__VA_ARGS__)
 
 #endif
 

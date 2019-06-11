@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <openssl/md5.h>
+#include <string.h>
 
 //计算文件内容中index开始的size大小的md5
 int md5sum_fileindex(const char *file, long int index, long int size,

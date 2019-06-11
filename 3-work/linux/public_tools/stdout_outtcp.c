@@ -129,7 +129,7 @@ int stdout_outtcp_start(const char *ipv4str, unsigned short port)
 {
 	pthread_t pt;
 	const char *ptr = NULL;
-	unsigned short port = 0;
+
 	if (_flagRun)
 		return -1;
 
