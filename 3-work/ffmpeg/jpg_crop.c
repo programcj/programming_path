@@ -79,7 +79,7 @@ void av_frame_save_jpg(const char *filename, AVFrame *frame) {
 	avcodec_free_context(&pCodecCtx);
 }
 
-int yuv_crop(AVFrame *srcFrame, AVFrame *dscFrame, int x, int y) {
+int yuv420_crop(AVFrame *srcFrame, AVFrame *dscFrame, int x, int y) {
 	int yuv_y = 0;
 	int yuv_uv = 0;
 	void *ptr_y, *ptr_u, *ptr_v;
@@ -148,7 +148,7 @@ void jpg_decode_data(void *data, int size) {
 
 			av_frame_save_jpg("/tmp/0.jpg", pAvFrame);
 
-			yuv_crop(pAvFrame, dscFrame, 10, 600);
+			yuv420_crop(pAvFrame, dscFrame, 10, 600);
 
 			printf("start save...\n");
 			av_frame_save_jpg("/tmp/crop-0.jpg", dscFrame);
