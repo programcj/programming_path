@@ -141,7 +141,7 @@ void avframe_to_nv12(AVFrame* srcframe)
     av_frame_get_buffer(frame, 32);
     ret = av_frame_make_writable(frame);
 
-    //还可以裁剪
+    //只能转换分辨率
     ret = sws_scale(m_pSwsContext, srcframe->data, srcframe->linesize, 0,
         srcframe->height, frame->data, frame->linesize);
 
