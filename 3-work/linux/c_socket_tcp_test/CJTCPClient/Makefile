@@ -1,5 +1,5 @@
 CC=gcc
-CFLAG=
+CFLAG= -g
 
 all:
 	$(CC) $(CFLAG) -c *.c 
