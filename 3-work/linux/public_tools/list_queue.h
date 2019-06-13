@@ -20,17 +20,17 @@
 #include <semaphore.h>
 #include "list.h"
 
+#define CONFIG_LIST_USE_CONDLOCK
+
 struct list_queue
 {
 	pthread_mutex_t lock;
 
 #ifdef CONFIG_LIST_USE_CONDLOCK //条件变量
-
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
-
 	pthread_condattr_t attr;
-
+#if 0
 	pthread_condattr_init(&attr);
 	pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
 	pthread_cond_init(&cond, &attr);
@@ -50,11 +50,13 @@ struct list_queue
 	pthread_mutex_lock(&mutex);/*锁住互斥量*/
 	ret = pthread_cond_timedwait(&cond, &mutex, &tv);
 	pthread_mutex_unlock(&mutex);/*解锁互斥量*/
+#endif
 	
 #else
 	//有名信号量sem_open/sem_close
 	//内存信号量sem_init/sem_destroy
 	sem_t sem;
+	// sem_getvalue(&list.sem, &value);
 #endif
 
 	struct list_head list;
