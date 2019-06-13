@@ -14,6 +14,7 @@ int main(int argc, char **argv) {
 	int fds[2];
 	int ret;
 
+	//可以往sv[0]中写，从sv[1]中读；或者从sv[1]中写，从sv[0]中读； 
 	ret = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 
 	char *buff = "my is fds[0]\n";
