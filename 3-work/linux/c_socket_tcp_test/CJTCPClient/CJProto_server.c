@@ -668,11 +668,13 @@ void proto_service_loop(struct proto_service_context *pser) {
 					sp != &pser->session_list_head; sp = sn, sn = sp->next) {
 				if (sp->interval_start) {
 					if (time_interval > sp->interval) {
+						sp->interval_start = 0;
+						sp->interval = 0;
+
 						ret = pser->backfun_rwhandle(pser, session,
 								PS_EVENT_TIMEROUT);
 
-						sp->interval_start = 0;
-						sp->interval = 0;
+						
 						if (ret == -1)
 							proto_service_close_session(pser, session);
 					}
@@ -707,23 +709,27 @@ void proto_service_loop(struct proto_service_context *pser) {
 						}
 						session->fd = ev.data.fd;
 						socket_nonblock(ev.data.fd, 1);
+						
+						ev.events = EPOLLIN;
+						ev.data.ptr = session;
 
-						ret = pser->backfun_rwhandle(pser, session,
-								PS_EVENT_SESSION_CREATE);
+						proto_service_append_session(pser, session);
+						ret = pser->backfun_rwhandle(pser, session, PS_EVENT_SESSION_CREATE);
+
+						ret=epoll_ctl(epollfd, EPOLL_CTL_ADD, session->fd, &ev);
+						if(ret!=0) {
+							proto_service_close_session(pser, session);
+							break;							
+						}
+						
 
 						ret = pser->backfun_rwhandle(pser, session,
 								PS_EVENT_ACCEPT);
 
 						if (ret != 0) {
-							close(ev.data.fd);
+							proto_service_close_session(pser, session);
 							break;
 						}
-						ev.events = EPOLLIN;
-						ev.data.ptr = session;
-
-						proto_service_append_session(pser, session);
-
-						epoll_ctl(epollfd, EPOLL_CTL_ADD, session->fd, &ev);
 						item_count++;
 					}
 					break;
