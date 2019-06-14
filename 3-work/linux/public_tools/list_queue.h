@@ -4,13 +4,28 @@
  *  Created on: 2017年3月29日
  *      Author: cj
  * 
+ * struct test {
+ *    struct list_head list;
+ *    int v;
+ * };
+ *
+ * struct test v;
+ *
  * struct list_queue queue;
- * 
+ * struct list_head *p;
  * list_queue_init(&queue);
  * 
+ * v.v=123;
+ * list_queue_apppend_tail(&queue, &v.list);
+ * 
+ * p=list_queue_pop(&queue); //p=(struct list_head *)p;
+ * p=list_entry(p,struct test,list);
+ * printf("%d\n", p->v);
+ *
  * list_queue_release(&queue); //you need clear list
  * 
  * 
+ *
  */
 
 #ifndef SRC_LIST_QUEUE_H_
