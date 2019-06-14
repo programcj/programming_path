@@ -35,7 +35,7 @@ int os_proc_meminfo_read(const char *name, unsigned long *value);
 
 int os_linux_callcmd(int *rfd, int *wfd, char *cmdargs[]);
 
-int io_nonblock(int fd, int flag);
+int os_io_nonblock(int fd, int flag);
 
 
 #endif /* SRC_PUBLIC_OS_LINUX_H_ */

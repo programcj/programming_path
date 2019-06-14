@@ -87,7 +87,15 @@ void list_queue_append_tail2(struct list_queue *queue,
 }
 
 void list_queue_release(struct list_queue *queue) {
+	struct list_head *p = NULL, *n = NULL;
+
 	pthread_mutex_lock(&queue->lock);
+	list_for_each_safe(p,n,&queue->list)
+	{
+		list_del(p);
+		queue->length--;
+		//break;
+	}
 	pthread_mutex_unlock(&queue->lock);
 
 	pthread_mutex_destroy(&queue->lock);
@@ -205,12 +213,14 @@ struct list_head *list_queue_pop(struct list_queue *queue) {
 	struct list_head *v = NULL;
 
 	pthread_mutex_lock(&queue->lock);
-	list_for_each_safe(p,n,&queue->list)
-	{
+	p = queue->list.next;
+	if (p != &queue->list)
+	//list_for_each_safe(p,n,&queue->list)
+			{
 		v = p;
 		list_del(p);
 		queue->length--;
-		break;
+		//break;
 	}
 	pthread_mutex_unlock(&queue->lock);
 	return v;

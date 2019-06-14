@@ -13,7 +13,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/sysinfo.h>
-#include "tools.h"
+#include "os_linux.h"
 
 void os_linux_drop_caches(int value) {
 	char buf[2];
@@ -100,7 +100,7 @@ int os_linux_callcmd(int *rfd, int *wfd, char *cmdargs[]) {
 	return pid;
 }
 
-int io_nonblock(int fd, int flag) {
+int os_io_nonblock(int fd, int flag) {
 	int ret;
 	int flags = fcntl(fd, F_GETFL);
 	if (flags == -1)
