@@ -1,110 +1,181 @@
 /*
- * list_queue.h
+ * lqueue.h
  *
  *  Created on: 2017年3月29日
  *      Author: cj
  * 
- * struct list_queue queue;
+ * struct lqueue queue;
  * 
- * list_queue_init(&queue);
+ * lqueue_init(&queue);
  * 
- * list_queue_release(&queue); //you need clear list
+ * lqueue_release(&queue); //you need clear list
  * 
  * 
  */
 
-#ifndef SRC_LIST_QUEUE_H_
-#define SRC_LIST_QUEUE_H_
+#ifndef _LQUEUE_H_
+#define _LQUEUE_H_
 
 #include <pthread.h>
 #include <semaphore.h>
-#include "list.h"
+#include <stdint.h>
 
-#define CONFIG_LIST_USE_CONDLOCK
+//Pthreads
+//spinlock  自旋锁
+//rwlock 	读写锁
+//Mutex 	互斥量
+//Cond 		条件变量
+//Semaphore 信号变量
 
-struct list_queue
-{
-	pthread_mutex_t lock;
-
-#ifdef CONFIG_LIST_USE_CONDLOCK //条件变量
-	pthread_mutex_t mutex;
-	pthread_cond_t cond;
-	pthread_condattr_t attr;
-#if 0
-	pthread_condattr_init(&attr);
-	pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
-	pthread_cond_init(&cond, &attr);
-
-	pthread_mutex_lock(&mutex);/*锁住互斥量*/
-	//pthread_cond_broadcast(&cond);
-	pthread_cond_signal(&cond);/*条件改变，发送信号，通知t_b进程*/ 
-	pthread_mutex_unlock(&mutex);/*解锁互斥量*/
-
-	pthread_mutex_lock(&mutex); 
-	pthread_cond_wait(&cond,&mutex);/*解锁mutex，并等待cond改变*/ 
-	pthread_mutex_unlock(&mutex); 
-
-	struct timespec tv;
-	clock_gettime(CLOCK_MONOTONIC, &tv);
-	tv.tv_sec += sec;
-	pthread_mutex_lock(&mutex);/*锁住互斥量*/
-	ret = pthread_cond_timedwait(&cond, &mutex, &tv);
-	pthread_mutex_unlock(&mutex);/*解锁互斥量*/
-#endif
-	
-#else
-	//有名信号量sem_open/sem_close
-	//内存信号量sem_init/sem_destroy
-	sem_t sem;
-	// sem_getvalue(&list.sem, &value);
-#endif
-
-	struct list_head list;
-	int length;
+//>kernel
+//spin_lock 自旋锁
+//原子变量
+//dy_lock 	临界区
+//read_lock 读写自旋锁
+//DECLARE_MUTEX sema_init 信号量
+//DECLARE_COMPLETION 	完成变量
+//wakelock机制
+//Per-CPU变量
+struct os_event_cond {
+	int initflag;
+	pthread_mutex_t smutex;
+	pthread_cond_t scond;
+	pthread_condattr_t sattr;
 };
 
-/* init */
-void list_queue_init(struct list_queue *queue);
+struct os_event_cond *os_event_cond_new();
+void os_event_cond_delete(struct os_event_cond *p);
 
-void list_queue_append_head(struct list_queue *queue, struct list_head *newlist);
+int os_event_cond_init(struct os_event_cond *p);
 
-void list_queue_append_tail(struct list_queue *queue, struct list_head *newlist);
+void os_event_cond_destory(struct os_event_cond *p);
 
-//postflag: 1 send sem; 0 not send signed
-void list_queue_append_tail2(struct list_queue *queue,
-							 struct list_head *newlist, int postflag);
+int os_event_cond_signal(struct os_event_cond *p);
 
-void list_queue_release(struct list_queue *queue);
+int os_event_cond_wait_sec(struct os_event_cond *p, int sec);
 
-int list_queue_length(struct list_queue *queue);
+struct lqueue_node {
+	struct lqueue_node *next;
+	struct lqueue_node *priv;
+	struct lqueue *queue;
+};
 
-int list_queue_wait(struct list_queue *queue, int ms);
+struct lqueue {
+	//head
+	struct lqueue_node *next;
+	struct lqueue_node *priv;
+	uint lqlen;
+	pthread_mutex_t lock;
+	void *user; //绑定数据
 
-//if you need set os time, not use the fun
-//如果需要修改系统时间，就不能使用这个函数,请使用 list_queue_wait
-int list_queue_timedwait(struct list_queue *queue, int seconds);
+//#ifdef CONFIG_LIST_USE_CONDLOCK //条件变量
+//	pthread_mutex_t smutex;
+//	pthread_cond_t scond;
+//	pthread_condattr_t sattr;
+//	pthread_condattr_init(&attr);
+//	pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+//	pthread_cond_init(&cond, &attr);
+//
+//	pthread_mutex_lock(&mutex);/*锁住互斥量*/
+////pthread_cond_broadcast(&cond);
+//	pthread_cond_signal(&cond);/*条件改变，发送信号，通知t_b进程*/
+//	pthread_mutex_unlock(&mutex);/*解锁互斥量*/
+//
+//	pthread_mutex_lock(&mutex);
+//	pthread_cond_wait(&cond,&mutex);/*解锁mutex，并等待cond改变*/
+//	pthread_mutex_unlock(&mutex);
+//
+//	struct timespec tv;
+//	clock_gettime(CLOCK_MONOTONIC, &tv);
+//	tv.tv_sec += sec;
+//	pthread_mutex_lock(&mutex);/*锁住互斥量*/
+//	ret = pthread_cond_timedwait(&cond, &mutex, &tv);
+//	pthread_mutex_unlock(&mutex);/*解锁互斥量*/
+//	pthread_cond_destroy(&queue->scond);
+//	pthread_condattr_destroy(&queue->sattr);
+//	pthread_mutex_destroy(&queue->smutex);
+//有名信号量sem_open/sem_close
+//内存信号量sem_init/sem_destroy
+//	sem_t sem;
+// sem_getvalue(&list.sem, &value);
+};
 
-struct list_head *list_queue_pop(struct list_queue *queue);
+static inline void lqueue_init(struct lqueue *queue) {
+	pthread_mutex_init(&queue->lock, NULL);
+	queue->next = queue->priv = (struct lqueue_node *) queue;
+	queue->lqlen = 0;
+}
 
-struct list_head *list_queue_first(struct list_queue *queue);
+static inline void lqueue_destory(struct lqueue *queue) {
+	pthread_mutex_destroy(&queue->lock);
+	queue->lqlen = 0;
+}
 
-struct list_head *list_queue_next(struct list_queue *queue,
-								  struct list_head *mylist);
+static inline uint lqueue_len(struct lqueue *queue) {
+	return queue->lqlen;
+}
 
-void list_queue_list_delete(struct list_queue *queue, struct list_head *mylist);
+static inline void lqueue_insert(struct lqueue *queue,
+		struct lqueue_node *newnode, struct lqueue_node *prev,
+		struct lqueue_node *next) {
+	newnode->next = next;
+	newnode->priv = prev;
+	next->priv = prev->next = newnode;
+	newnode->queue = queue;
+	queue->lqlen++;
+}
 
-int list_queue_lock(struct list_queue *queue);
-int list_queue_unlock(struct list_queue *queue);
+static inline void lqueue_node_del(struct lqueue_node *node) {
+	node->priv->next = node->next;
+	node->next->priv = node->priv;
+	node->priv = node->next = NULL;
+	node->queue->lqlen--;
+}
 
-/**
- * sem wait expand
- *   sem_trywait  
- *   usleep(1000)  and errno ==EAGAIN
- * 1S=1000ms  
- * 1ms=1000us
- * 1us=1000ns
- * @ms >10
- */
-int sem_wait_ms(sem_t *sem, int ms);
+static inline void lqueue_append_tail(struct lqueue *queue,
+		struct lqueue_node *newnode) {
+	pthread_mutex_lock(&queue->lock);
+	lqueue_insert(queue, newnode, queue->priv, (struct lqueue_node*) queue);
+	pthread_mutex_unlock(&queue->lock);
+}
 
-#endif /* SRC_LIST_QUEUE_H_ */
+static inline void lqueue_append_head(struct lqueue *queue,
+		struct lqueue_node *newnode) {
+	pthread_mutex_lock(&queue->lock);
+	lqueue_insert(queue, newnode, (struct lqueue_node*) queue, queue->next);
+	pthread_mutex_unlock(&queue->lock);
+}
+
+static inline struct lqueue_node *lqueue_pop(struct lqueue *queue) {
+	struct lqueue_node *node = NULL;
+	pthread_mutex_lock(&queue->lock);
+	node = queue->priv;
+
+	if (node == (struct lqueue_node*) queue)
+	node = NULL;
+	else {
+		node->priv->next = node->next;
+		node->next->priv = node->priv;
+
+		node->priv = node->next = NULL;
+		node->queue = NULL;
+		queue->lqlen--;
+	}
+	pthread_mutex_unlock(&queue->lock);
+	return node;
+}
+
+static inline struct lqueue_node *lqueue_dequeue(struct lqueue *queue) {
+	struct lqueue_node *node = NULL;
+	pthread_mutex_lock(&queue->lock);
+	node = queue->next;
+	if (node == (struct lqueue_node*) queue)
+	node = NULL;
+	else {
+		lqueue_node_del(node);
+	}
+	pthread_mutex_unlock(&queue->lock);
+	return node;
+}
+
+#endif /* SRC_lqueue_H_ */

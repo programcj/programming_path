@@ -16,12 +16,14 @@
  * 
  * 请注意编码格式
  */
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <poll.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 #include "proto_service.h"
 

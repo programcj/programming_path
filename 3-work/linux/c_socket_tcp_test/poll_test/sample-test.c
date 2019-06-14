@@ -22,9 +22,10 @@
 #include <unistd.h>
 #include <net/if.h>
 
-#include "list_queue.h"
+#include "lqueue.h"
 #include "proto_service.h"
 
+#if 0
 struct list_item {
 	struct list_head list_node;
 	int v;
@@ -70,13 +71,13 @@ void *_run(void *args) {
 
 		list_item = list_queue_pop(&queue);
 		if (list_item == NULL)
-			continue;
+		continue;
 		tm[3] = time_long();
 
 		node = list_entry(list_item, struct list_item, list_node);
 
 		if (node->v == 9999)
-			break;
+		break;
 		free(node);
 	}
 	printf("start:%ld, wait:%ld, pop:%ld item.v=%d\n", tm[3] - tm[0],
@@ -90,6 +91,7 @@ struct list_item *item_new() {
 	item->v = rand() % 10;
 	return item;
 }
+#endif
 
 #include <malloc.h>
 
@@ -158,11 +160,14 @@ int rwhandle(struct proto_service_context *context,
 	return 0;
 }
 
+#include "lqueue.h"
+
 int main(void) {
 	struct proto_service_context service;
-
 	srand((unsigned int) getpid());
-	list_queue_init(&queue);
+
+	lqueue_test();
+	exit(1);
 
 	//mallopt(M_MMAP_MAX, 0); // 禁止malloc调用mmap分配内存
 	//mallopt(M_TRIM_THRESHOLD, -1); // 禁止内存紧缩
@@ -180,7 +185,6 @@ int main(void) {
 	//需要把这些fd手动关闭
 	proto_service_destory(&service);
 
-	list_queue_release(&queue);
 	printf("----------\n");
 	return EXIT_SUCCESS;
 }
