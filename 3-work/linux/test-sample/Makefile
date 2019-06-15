@@ -1,5 +1,6 @@
 CC=gcc
-CFLAG=-g
+CFLAG=-g 
+LDFLAGS = -lpthread -L../public_tools -lptools -Wl,-rpath,../public_tools
 
 sample-list:
 	$(CC) $(CFLAG) sample-list.c ../public_tools/list_queue.c -lpthread
@@ -10,6 +11,9 @@ sample-tools:
 sample-clog: libptools
 	$(CC) $(CFLAG) sample-clog.c -o sample-clog.exe -L../public_tools -lptools -lcurl -Wl,-rpath,../public_tools
 
+sample-carray: libptools
+	$(CC) $(CFLAG) sample-carray.c -o sample-carray.exe $(LDFLAGS)
+	
 clean:
 	rm *.out
 	rm *.exe

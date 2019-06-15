@@ -151,17 +151,16 @@ int rwhandle(struct proto_service_context *context,
 	case PS_EVENT_WRITE:
 		//proto_service_session_timeout_stop(session);
 		sprintf(buff, "[%lu][%d][%d]hello my is epoll server!\n",
-				proto_service_monotonic_timestamp_ms(),
-				session->fd, session->peerport);
+				proto_service_monotonic_timestamp_ms(), session->fd,
+				session->peerport);
 		ret = send(fd, buff, strlen(buff), 0);
 		printf("PS_EVENT_WRITE ret=%d fd=%d,%s\n", ret, fd, buff);
 		//proto_service_on_write(context, session, 0);
 		debug_socket_fd(fd);
 
-		proto_service_session_timeout_start(session, 3);
-
 		if (proto_service_session_is_choke(session)) {
 			printf("choke-> fd=%d\n", session->fd);
+			proto_service_session_timeout_start(session, 3);
 		}
 
 		if (ret < strlen(buff)) {
@@ -207,6 +206,81 @@ int rwhandle(struct proto_service_context *context,
 	return 0;
 }
 
+
+int rwhandle2(struct proto_service_context *context,
+		struct proto_session *session, int event) {
+	char buff[100];
+	int ret = 0;
+	int fd = session->fd;
+
+	memset(buff, 0, sizeof(buff));
+
+	printf("fd=%d event:%d\n", fd, event);
+
+	switch (event) {
+	case PS_EVENT_SESSION_CREATE:
+		printf("PS_EVENT_SESSION_CREATE fd=%d,%s\n", fd, buff);
+		break;
+	case PS_EVENT_SESSION_DESTORY:
+		printf("PS_EVENT_SESSION_DESTORY fd=%d,%s\n", fd, buff);
+		break;
+	case PS_EVENT_ACCEPT:
+		printf("PS_EVENT_ACCEPT, fd=%d\n", fd);
+		debug_socket_fd(fd);
+		socket_set_sendbuf_size(fd, 1024 * 1024); //1M
+		socket_setopt(fd, SO_SNDBUFFORCE, 1024 * 1024 * 2);
+		break;
+	case PS_EVENT_RECV: {
+		debug_socket_fd(fd);
+		ret = recv(fd, buff, sizeof(buff), 0);
+		proto_service_session_timeout_start(session, 3);
+		printf("PS_EVENT_RECV ret=%d, fd=%d,%s\n", ret, fd, buff);
+		if (ret == 0) {
+			printf("err:%d\n", socket_get_error(fd));
+			return -1;
+		}
+	}
+		break;
+	case PS_EVENT_WRITE:
+		//proto_service_session_timeout_stop(session);
+		sprintf(buff, "[%lu][%d][%d]hello my is epoll server!\n",
+				proto_service_monotonic_timestamp_ms(), session->fd,
+				session->peerport);
+		ret = send(fd, buff, strlen(buff), 0);
+		printf("PS_EVENT_WRITE ret=%d fd=%d,%s\n", ret, fd, buff);
+		//proto_service_on_write(context, session, 0);
+		debug_socket_fd(fd);
+
+		if (proto_service_session_is_choke(session)) {
+			printf("choke-> fd=%d\n", session->fd);
+			proto_service_session_timeout_start(session, 3);
+		}
+
+		if (ret < strlen(buff)) {
+			printf("ret < strlen(buff)\n");
+		}
+		proto_service_on_write(context, session, 0);
+
+		if (ret == 0)
+			return -1;
+
+		break;
+
+	case PS_EVENT_CLOSE:
+		printf("PS_EVENT_CLOSE fd=%d,%s\n", fd, buff);
+		break;
+
+	case PS_EVENT_TIMEROUT:
+		printf("PS_EVENT_TIMEROUT fd=%d\n", fd);
+		debug_socket_fd(fd);
+		printf("ret=%d , is choke:%d\n", ret,
+				proto_service_session_is_choke(session));
+		proto_service_on_write(context, session, 1);
+		break;
+	}
+	return 0;
+}
+
 #include "lqueue.h"
 
 int main(void) {
@@ -231,14 +305,18 @@ int main(void) {
 	//mallopt(M_MMAP_THRESHOLD, 1024 * 1024);
 	memset(&service, 0, sizeof(service));
 
-	service.backfun_rwhandle = rwhandle;
+	service.backfun_rwhandle = rwhandle2;
 	proto_service_init(&service);
 	proto_service_add_listen(&service, 1883);
 	proto_service_add_listen(&service, 1884);
 	proto_service_add_listen(&service, 1885);
 
 	printf("loop start...\n");
-	proto_service_loop(&service);
+
+	while (1) {
+		//int proto_service_session_noinbkfun_close(...)
+		proto_service_loop(&service);
+	}
 	//需要把这些fd手动关闭
 	proto_service_destory(&service);
 

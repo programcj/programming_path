@@ -21,8 +21,7 @@
 #define PROTO_SERVICE_H_
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 #include <stdint.h>
@@ -52,21 +51,27 @@ struct proto_session {
 	long interval; // ms
 };
 
+#define proto_session_user(session, type)  (type*)(session->user)
+
 struct proto_service_context {
+	int epollfd;
+	struct epoll_event *epoll_events;
+	int epoll_events_count;
+
 	int *listen_fds;
 	int listen_fdsize;
 	int listen_port;
-	int run_loop;
-	int epollfd;
+
 	int sfd[2]; //0 :read, 1:write
-	int sfddata;
+	char sfddata[5];
+
+	struct proto_session session_list_head;
+	int session_count;
 
 	void *user; //bind data
 
 	int (*backfun_rwhandle)(struct proto_service_context *context,
 			struct proto_session *session, int event);
-	struct proto_session session_list_head;
-	int session_count;
 };
 
 void *proto_malloc(size_t size);
@@ -91,7 +96,13 @@ int proto_service_session_is_choke(struct proto_session *session);
 
 void proto_service_signal_quit_wait(struct proto_service_context *context);
 
-void proto_service_loop(struct proto_service_context *context);
+int proto_service_loop(struct proto_service_context *context);
+
+//不能在回调函数中close
+int proto_service_session_noinbkfun_close(struct proto_service_context *context,
+		struct proto_session *s);
+
+void proto_service_quit(struct proto_service_context *context);
 
 uint64_t proto_service_monotonic_timestamp_ms();
 
