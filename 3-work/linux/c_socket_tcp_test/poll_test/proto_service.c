@@ -23,11 +23,13 @@
 #include <sys/epoll.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "proto_service.h"
 
-static inline int socket_setoptint(int fd, int leve, int opt, int v) {
+static inline int socket_set(int fd, int leve, int opt, int v) {
 	return setsockopt(fd, leve, opt, (char*) &v, sizeof v);
 }
 
@@ -63,14 +65,20 @@ void *proto_calloc(size_t c, size_t s) {
 
 #include <time.h>
 
-long proto_service_time_interval_ms() {
+//1s=1000ms
+//1ms=1000us
+//1us=1000ns
+//nsec = 纳秒
+uint64_t proto_service_monotonic_timestamp_ms() {
+#if 1
 	struct timespec tv;
-	clock_gettime(CLOCK_MONOTONIC, &tv); //系统启动时间
-	//1s=1000ms
-	//1ms=1000us
-	//1us=1000ns
-	//nsec = 纳秒
-	return tv.tv_sec * 1000 + (tv.tv_nsec / 1000000);
+	clock_gettime(CLOCK_MONOTONIC, &tv); //system power start
+	return (uint64_t) tv.tv_sec * 1000 + tv.tv_nsec / 1000000;
+#else
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return (uint64_t)tv.tv_sec * 1000 +tv.tv_usec/1000; //1532458552
+#endif
 }
 
 void proto_service_init(struct proto_service_context *pser) {
@@ -112,7 +120,7 @@ int proto_service_on_write(struct proto_service_context *context,
 
 int proto_service_session_timeout_start(struct proto_session *session,
 		int timeout_s) {
-	session->interval_start = proto_service_time_interval_ms();
+	session->interval_start = proto_service_monotonic_timestamp_ms();
 	session->interval = timeout_s * 1000;
 	return 0;
 }
@@ -155,11 +163,11 @@ int proto_service_add_listen(struct proto_service_context *context, int port) {
 	saddr.sin_port = htons(port);
 	inet_pton(AF_INET, local_addr, &(saddr.sin_addr)); //htons(portnumber);
 
-	ret = socket_setoptint(fd, SOL_SOCKET, SO_REUSEPORT, 1);
+	ret = socket_set(fd, SOL_SOCKET, SO_REUSEPORT, 1);
 	if (ret == -1)
 		goto __err;
 
-	ret = socket_setoptint(fd, SOL_SOCKET, SO_REUSEPORT, 1);
+	ret = socket_set(fd, SOL_SOCKET, SO_REUSEPORT, 1);
 	if (ret == -1)
 		goto __err;
 
@@ -256,12 +264,12 @@ void proto_service_loop(struct proto_service_context *pser) {
 	eventall = calloc(epollsize, 1);
 	pser->run_loop = 1;
 
-	struct proto_session *session, *sn, *sp;
+	struct proto_session *session = NULL, *sn = NULL, *sp = NULL;
 	int interval_min = 100;
 
 	while (pser->run_loop) {
 		{ //寻找最小定时器时间
-			time_interval = proto_service_time_interval_ms();
+			time_interval = proto_service_monotonic_timestamp_ms();
 
 			for (sp = pser->session_list_head.next, sn = sp->next;
 					sp != &pser->session_list_head; sp = sn, sn = sp->next) {
@@ -286,6 +294,7 @@ void proto_service_loop(struct proto_service_context *pser) {
 			}
 			memset(eventall, 0, sizeof(epollsize));
 		}
+
 		//毫秒延时 1s=1000ms
 		fdcount = epoll_wait(epollfd, eventall, epollsize, interval_min);
 
@@ -293,7 +302,7 @@ void proto_service_loop(struct proto_service_context *pser) {
 			break;
 		}
 
-		time_interval = proto_service_time_interval_ms();
+		time_interval = proto_service_monotonic_timestamp_ms();
 
 		//寻找定时器
 		{
@@ -329,7 +338,7 @@ void proto_service_loop(struct proto_service_context *pser) {
 
 						{
 							struct sockaddr_in caddr;
-							int caddrlen = sizeof(caddr);
+							socklen_t caddrlen = sizeof(caddr);
 							ev.data.fd = accept(eventall[i].data.fd,
 									(struct sockaddr*) &caddr, &caddrlen);
 						}

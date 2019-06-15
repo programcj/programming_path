@@ -60,6 +60,9 @@ struct lqueue_node {
 	struct lqueue *queue;
 };
 
+#define lqueue_node_entry(ptr, type, node) \
+		 (type*)( (char*)ptr - (size_t)&((type*)0)->node)
+
 struct lqueue {
 	//head
 	struct lqueue_node *next;

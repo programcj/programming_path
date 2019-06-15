@@ -100,6 +100,7 @@ int os_event_cond_wait_sec(struct os_event_cond *p, int sec) {
 
 void lqueue_test() {
 	struct lqueue queue;
+
 	struct abcde {
 		struct lqueue_node lqueue_node;
 		int v;
@@ -113,11 +114,17 @@ void lqueue_test() {
 		lqueue_append_tail(&queue, &nodes[i].lqueue_node);
 	}
 
-	struct abcde *v;
+	struct abcde *v = NULL;
+	struct lqueue_node *item = NULL;
+	printf(">>> %ld\n", ((size_t) &((struct abcde *)0)->lqueue_node));
+
 	while (1) {
-		v = (struct abcde*) lqueue_pop(&queue);
-		if (!v)
+		item = lqueue_pop(&queue);
+		if(!item)
 			break;
+
+		v = lqueue_node_entry(item, struct abcde, lqueue_node);
+		//v = (struct abcde*) lqueue_pop(&queue);
 		printf("v=%d ", v->v);
 	}
 
@@ -128,6 +135,7 @@ void lqueue_test() {
 		lqueue_append_tail(&queue, &nodes[i].lqueue_node);
 	}
 
+	v=NULL;
 	while (1) {
 		v = (struct abcde*) lqueue_dequeue(&queue);
 		if (!v)

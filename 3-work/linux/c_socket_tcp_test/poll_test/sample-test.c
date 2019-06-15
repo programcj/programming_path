@@ -95,6 +95,21 @@ struct list_item *item_new() {
 
 #include <malloc.h>
 
+#include "../socket_opt/socket_opt.h"
+
+void debug_socket_fd(int fd) {
+	int recvbuf = socket_get_rcvbuf_size(fd);
+	int sendbuf = socket_get_sendbuf_size(fd);
+	int inlen;
+	int outlen;
+
+	socket_get_count_in_queue(fd, &inlen);
+	socket_get_count_out_queue(fd, &outlen);
+
+	printf(" recvbuf=%d sendbuf=%d \n", recvbuf, sendbuf);
+	printf(" inlen=%d outlen=%d \n", inlen, outlen);
+}
+
 int rwhandle(struct proto_service_context *context,
 		struct proto_session *session, int event) {
 	char buff[100];
@@ -112,23 +127,27 @@ int rwhandle(struct proto_service_context *context,
 		break;
 	case PS_EVENT_ACCEPT:
 		printf("PS_EVENT_ACCEPT, fd=%d\n", fd);
+		debug_socket_fd(fd);
 		break;
 	case PS_EVENT_RECV: {
+		debug_socket_fd(fd);
 		ret = recv(fd, buff, sizeof(buff), 0);
 		proto_service_session_timeout_start(session, 3);
-		printf("PS_EVENT_RECV fd=%d,%s\n", fd, buff);
-		if (ret == 0)
+		printf("PS_EVENT_RECV ret=%d, fd=%d,%s\n", ret, fd, buff);
+		if (ret == 0) {
+			printf("err:%d\n", socket_get_error(fd));
 			return -1;
+		}
 		proto_service_on_write(context, session, 1);
 	}
 		break;
 	case PS_EVENT_WRITE:
-
 		proto_service_session_timeout_stop(session);
 		strcpy(buff, "hello my is epoll server!\n");
 		ret = send(fd, buff, strlen(buff), 0);
 		printf("PS_EVENT_WRITE ret=%d fd=%d,%s\n", ret, fd, buff);
 		//proto_service_on_write(context, session, 0);
+		debug_socket_fd(fd);
 
 		if (proto_service_session_is_choke(session)) {
 			proto_service_session_timeout_start(session, 3);
@@ -137,6 +156,7 @@ int rwhandle(struct proto_service_context *context,
 		if (ret < strlen(buff)) {
 			printf("ret < strlen(buff)\n");
 		}
+		proto_service_on_write(context, session, 0);
 
 		if (ret == 0)
 			return -1;
@@ -151,7 +171,7 @@ int rwhandle(struct proto_service_context *context,
 		printf("PS_EVENT_TIMEROUT fd=%d\n", fd);
 
 		ret = send(fd, "123\n", 4, 0);
-
+		debug_socket_fd(fd);
 		printf("ret=%d , is choke:%d\n", ret,
 				proto_service_session_is_choke(session));
 		proto_service_on_write(context, session, 1);
@@ -165,9 +185,19 @@ int rwhandle(struct proto_service_context *context,
 int main(void) {
 	struct proto_service_context service;
 	srand((unsigned int) getpid());
+	//31536000 * 100 ==100year (uint32)
 
-	lqueue_test();
-	exit(1);
+	uint32_t addr;
+	inet_aton("192.168.1.1", (struct in_addr*) &addr);
+	printf("%08X\n", addr);
+
+	net_print_hostnameip("www.baidu.com");
+	net_print_addinfoip("www.baidu.com");
+
+	printf("[%lu] \n", proto_service_monotonic_timestamp_ms());
+
+	int sum = ( {int b=1; int c=2; b+c;});
+	printf("%d \n ", sum);
 
 	//mallopt(M_MMAP_MAX, 0); // 禁止malloc调用mmap分配内存
 	//mallopt(M_TRIM_THRESHOLD, -1); // 禁止内存紧缩

@@ -5,8 +5,8 @@
  *      Author: cj
  */
 
-#ifndef C_SOCKET_TCP_TEST_SOCKET_OPT_SOCKET_OPT_H_
-#define C_SOCKET_TCP_TEST_SOCKET_OPT_SOCKET_OPT_H_
+#ifndef _SOCKET_OPT_
+#define _SOCKET_OPT_
 
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -14,17 +14,21 @@
 #include <netinet/tcp.h>
 #include <errno.h>
 
-static inline int socket_getopt(int fd, int opt) {
-	int size = 0;
-	socklen_t size_siz = sizeof size;
-	if (getsockopt(fd, SOL_SOCKET, opt, (char*) &size, &size_siz) < 0) {
-		return 0;
-	}
-	return size;
-}
+//获取输入输出缓冲已经缓冲的数据大小
+#include <linux/sockios.h>
+#include <sys/ioctl.h>
 
-#define socket_get_sendbuf_size(fd) socket_getopt(fd, SO_SNDBUF)
-#define socket_get_rcvbuf_size(fd) 	socket_getopt(fd, SO_RCVBUF)
+#define socket_get_count_out_queue(fd,pending)	ioctl(fd, SIOCOUTQ, pending)
+#define socket_get_count_in_queue(fd,pending)	ioctl(fd, SIOCINQ, pending)
+
+#define socket_get_error(fd) \
+	({ int err; socklen_t len=sizeof(err); getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&err, &len); err; })
+
+#define socket_get_sendbuf_size(fd) \
+	({ int err; socklen_t len=sizeof(err); getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (void *)&err, &len); err; })
+
+#define socket_get_rcvbuf_size(fd) 	\
+	({ int err; socklen_t len=sizeof(err); getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void *)&err, &len); err; })
 
 static inline int socket_nosigpipe(int fd, int flag) {
 #ifdef SO_NOSIGPIPE
@@ -40,23 +44,25 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v) {
 
 #define socket_setopt(fd, opt, v) socket_setoptint(fd,SOL_SOCKET,opt,v)
 
-//获取输入输出缓冲已经缓冲的数据大小
-#include <linux/sockios.h>
-#define socket_get_count_out_queue(fd,pending)	ioctl(fd, SIOCOUTQ, pending)
-#define socket_get_count_in_queue(fd,pending)	ioctl(fd, SIOCINQ, pending)
-
 //cat /proc/sys/net/core/wmem_max
 //SO_SNDBUFFORCE 可以重写wmem_max限制
-#define socket_set_sendbuf_size(fd,size) socket_setopt(fd,SO_SNDBUF, size)
+#define socket_set_sendbuf_size(fd, size) \
+	({ int v=size; setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (void*) &v, sizeof v); })
+
 //cat /proc/sys/net/core/rmem_max
 //SO_RCVBUFFORCE 可以重写rmem_max限制
-#define socket_set_rcvdbuf_size(fd,size) socket_setopt(fd,SO_RCVBUF, size)
+#define socket_set_rcvdbuf_size(fd,size) \
+	({ int v=size; setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void*) &v, sizeof v); })
 
-#define socket_set_reuseport(fd, flag)   socket_setopt(fd,SO_REUSEPORT, flag)
-#define socket_set_reuseaddr(fd, flag) 	 socket_setopt(fd,SO_REUSEADDR, flag)
+#define socket_set_reuseport(fd, flag) \
+		({ int v=flag; setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (void*) &v, sizeof v); })
+
+#define socket_set_reuseaddr(fd, flag) \
+		({ int v=flag; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void*) &v, sizeof v); })
 
 //广播
-#define socket_set_broadcast(fd, flag)	 socket_setopt(fd,SO_BROADCAST, flag)
+#define socket_set_broadcast(fd, flag) \
+	({ int v=flag; setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (void*) &v, sizeof v); })
 
 #define socket_send_nosignal(fd, buff)   send(fd, buff, strlen(buff), MSG_NOSIGNAL)
 
@@ -70,26 +76,25 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v) {
 //int keepInterval = 5; // 探测时发包的时间间隔为5 秒
 //int keepCount = 3; // 探测尝试的次数.如果第1次探测包就收到响应了,则后2次的不再发.
 //
-#define socket_set_keepalive(fd, flag) 	 socket_setopt(fd,SO_KEEPALIVE, flag)
+#define socket_set_keepalive(fd, flag) 	 socket_setoptint(fd,SOL_SOCKET,SO_KEEPALIVE, flag)
 #define socket_set_tcp_keepidle(fd, v)   socket_setoptint(fd,IPPROTO_TCP,TCP_KEEPIDLE,v)
 #define socket_set_tcp_keepintvl(fd, v)  socket_setoptint(fd,IPPROTO_TCP,TCP_KEEPINTVL,v)
 #define socket_set_tcp_keepcnt(fd, v)  	 socket_setoptint(fd,IPPROTO_TCP,TCP_KEEPCNT,v)
-
 #define socket_set_tcp_nodelay(fd, flag) socket_setoptint(fd,IPPROTO_TCP,TCP_NODELAY,flag)
+#define socket_set_ipv6only(fd, flag)	 socket_setoptint(fd, IPPROTO_IPV6, IPV6_V6ONLY, flag)
 
-#define socket_set_ipv6only(fd, flag) socket_setoptint(fd, IPPROTO_IPV6, IPV6_V6ONLY, flag)
-
+//https://blog.csdn.net/qiaotokong/article/details/25560797
 static inline int socket_is_established(int fd) {
 	struct tcp_info info;
 	socklen_t len = sizeof(struct tcp_info);
-	//info->tcpi_state==TCP_ESTABLISHED
-	//https://blog.csdn.net/qiaotokong/article/details/25560797
+
 	if (getsockopt(fd, IPPROTO_TCP, TCP_INFO, &info, &len) < 0) {
 		return -1; //err
 	}
 	return info.tcpi_state == TCP_ESTABLISHED;
 }
 
+//非阻塞模式
 static inline int socket_nonblock(int fd, int flag) {
 	int opt = fcntl(fd, F_GETFL, 0);
 	if (opt == -1) {
@@ -109,6 +114,18 @@ static inline int socket_nonblock(int fd, int flag) {
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
+//inet_aton
+//inet_ntoa
+//--
+//inet_pton
+//inet_ntop
+//--
+//获取socket 本地地址
+static inline int socket_getsockname(int fd, void *addr, socklen_t *len) {
+	return getsockname(fd, (struct sockaddr*) addr, len);
+}
+
+//获取socket 远端地址
 static inline int socket_get_peeraddrstring(int fd, char *buf, int len,
 		in_port_t *port) {
 	struct sockaddr_storage addr;
@@ -141,8 +158,23 @@ static inline int socket_get_peeraddrstring(int fd, char *buf, int len,
 #include <sys/un.h>
 #include <unistd.h>
 
-#define socket_bind(fd, addr, len)	bind(fd, (const struct sockaddr *)addr,len)
-#define socket_connect(fd,addr,len) connect(fd,(struct sockaddr *)&addr, len);
+static inline void socket_addr_in_set(struct sockaddr_in *addr, int family,
+		unsigned short port, const char *ipstr) {
+	addr->sin_family = AF_INET;
+	addr->sin_port = htons(port);
+	if (ipstr) {
+		inet_pton(addr->sin_addr, ipstr, &addr->sin_addr);
+	} else
+		addr->sin_addr.s_addr = INADDR_ANY;
+}
+
+static inline int socket_bind(int fd, void *addr, socklen_t len) {
+	return bind(fd, (const struct sockaddr *) addr, len);
+}
+
+static inline int socket_connect(int fd, void *addr, socklen_t len) {
+	return connect(fd, (struct sockaddr *) &addr, len);
+}
 
 static inline int socket_bind_af_unix(int fd, const char *path) {
 	struct sockaddr_un addr;
@@ -153,6 +185,7 @@ static inline int socket_bind_af_unix(int fd, const char *path) {
 }
 
 //接收指定长度的数据到buf中
+#if 0
 int socket_readn(int fd, void *buf, int len) {
 	int rt = 0;
 	int index = 0;
@@ -160,11 +193,11 @@ int socket_readn(int fd, void *buf, int len) {
 		rt = recv(fd, buf + index, len, 0);
 		if (rt < 0) {
 			if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-				continue;
+			continue;
 			return -1;
 		}
 		if (rt == 0)
-			return -1;
+		return -1;
 		index += rt;
 		len -= rt;
 	}
@@ -177,12 +210,48 @@ static inline int socket_recvex(int fd, void *buf, int maxlen) {
 	rc = recv(fd, buf, maxlen, 0);
 	if (rc < 0) {
 		if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-			return 0;
+		return 0;
 		return -1;
 	}
 	if (rc == 0)
-		return -1;
+	return -1;
 	return rc;
+}
+#endif
+
+#include <netdb.h>
+
+static inline void net_print_hostnameip(const char *hostname) {
+	struct hostent *host;
+	host = gethostbyname2(hostname, AF_INET);
+	if (host) {
+		printf("hostname:[%s]:[%s] %d \n", hostname, host->h_name,
+				host->h_length);
+		for (int i = 0; host->h_addr_list[i]; i++) {
+			//inet_ntop(AF_INET, host->h_addr_list[i], buf, sizeof(buf));
+			printf("%s\n", inet_ntoa(*(struct in_addr *) host->h_addr_list[i]));
+		}
+	}
+}
+
+static inline void net_print_addinfoip(const char *hostname) {
+	struct addrinfo hints;
+	struct addrinfo *res, *cur;
+
+	memset(&hints, 0, sizeof(struct addrinfo));
+	hints.ai_family = AF_INET; /* Allow IPv4 */
+	hints.ai_flags = AI_PASSIVE;/* For wildcard IP address */
+	hints.ai_protocol = 0; /* Any protocol */
+	hints.ai_socktype = SOCK_STREAM;
+
+	int ret = getaddrinfo(hostname, NULL, &hints, &res);
+	if (ret == 0) {
+		for (cur = res; cur != NULL; cur = cur->ai_next) {
+			printf("%s\n",
+					inet_ntoa(((struct sockaddr_in *) cur->ai_addr)->sin_addr));
+		}
+		freeaddrinfo(res);
+	}
 }
 
 #include <sys/stat.h>
@@ -202,7 +271,6 @@ static inline int io_mkfifo_create(const char *name, int mode) {
 #define io_msgrecv_nowait(id,msg, msgsiz,msgtype)	msgrcv(id,(void*)msg, msgz, msgtype, IPC_NOWAIT)
 #define io_msgrm_id(msgid)							msgctl(msgid, IPC_RMID, 0)
 
-
 #include <sys/shm.h>
 #include <sys/sem.h>
 
@@ -212,24 +280,32 @@ static inline int io_mkfifo_create(const char *name, int mode) {
 #define io_shmdt_ptr(shmptr)			shmdt(shmptr)
 #define io_shm_rmid(shmid)				shmctl(shmid, IPC_RMID, 0)
 #define io_mmap	mmap
+
 /**
  int shmid=shmget((key_t)1234, 100, 0666|IPC_CREATE);
  void *shm=shmat(shmid, 0, 0);
  while(1) strcpy(shm,"hello");
  shmdt(shm);
  shmctl(shmid, IPC_RMID,0);
---other thread--
-	while(1) printf("%s\n", shm);
+ --other thread--
+ while(1) printf("%s\n", shm);
  */
 #include <sys/mman.h>
 
 #include <fcntl.h>
 
 #define io_open(name, flag, ...)	open(name, flag, ##__VA_ARGS__)
-
-void test() {
-	//mmap(0,0,0,0,0,0);
-
-}
-
-#endif /* C_SOCKET_TCP_TEST_SOCKET_OPT_SOCKET_OPT_H_ */
+/**
+ * $man open
+ * flags:
+ * O_RDONLY O_WRONLY O_RDWR
+ *
+ * O_CREAT
+ * O_EXCL
+ * O_NOCTTY
+ * O_TRUNC
+ * O_APPEND
+ *
+ * sample: O_RDWR|O_CREAT|O_TRUNC
+ */
+#endif /* _SOCKET_OPT_ */

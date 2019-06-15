@@ -25,6 +25,8 @@ extern "C"
 {
 #endif
 
+#include <stdint.h>
+
 enum proto_service_event {
 	PS_EVENT_SESSION_CREATE,
 	PS_EVENT_SESSION_DESTORY,
@@ -44,7 +46,7 @@ struct proto_session {
 	int fd;
 
 	void *user;
-	long interval_start; //开始时间 ms
+	uint32_t interval_start; //开始时间 ms
 	long interval; // ms
 };
 
@@ -88,6 +90,8 @@ int proto_service_session_is_choke(struct proto_session *session);
 void proto_service_signal_quit_wait(struct proto_service_context *context);
 
 void proto_service_loop(struct proto_service_context *context);
+
+uint64_t proto_service_monotonic_timestamp_ms();
 
 #ifdef __cplusplus
 }
