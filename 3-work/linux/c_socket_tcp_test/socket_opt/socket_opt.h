@@ -38,7 +38,12 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v) {
 	return setsockopt(fd, leve, opt, (char*) &v, sizeof v);
 }
 
-#define socket_setopt(fd, opt, v) socket_setoptint(fd,SOL_SOCKET,opt,v);
+#define socket_setopt(fd, opt, v) socket_setoptint(fd,SOL_SOCKET,opt,v)
+
+//获取输入输出缓冲已经缓冲的数据大小
+#include <linux/sockios.h>
+#define socket_get_count_out_queue(fd,pending)	ioctl(fd, SIOCOUTQ, pending)
+#define socket_get_count_in_queue(fd,pending)	ioctl(fd, SIOCINQ, pending)
 
 //cat /proc/sys/net/core/wmem_max
 //SO_SNDBUFFORCE 可以重写wmem_max限制
@@ -50,9 +55,8 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v) {
 #define socket_set_reuseport(fd, flag)   socket_setopt(fd,SO_REUSEPORT, flag)
 #define socket_set_reuseaddr(fd, flag) 	 socket_setopt(fd,SO_REUSEADDR, flag)
 
+//广播
 #define socket_set_broadcast(fd, flag)	 socket_setopt(fd,SO_BROADCAST, flag)
-
-#define socket_set_keepalive(fd, flag) 	 socket_setopt(fd,SO_KEEPALIVE, flag)
 
 #define socket_send_nosignal(fd, buff)   send(fd, buff, strlen(buff), MSG_NOSIGNAL)
 
@@ -65,6 +69,8 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v) {
 //int keepIdle = 60; // 如该连接在60秒内没有任何数据往来,则进行探测
 //int keepInterval = 5; // 探测时发包的时间间隔为5 秒
 //int keepCount = 3; // 探测尝试的次数.如果第1次探测包就收到响应了,则后2次的不再发.
+//
+#define socket_set_keepalive(fd, flag) 	 socket_setopt(fd,SO_KEEPALIVE, flag)
 #define socket_set_tcp_keepidle(fd, v)   socket_setoptint(fd,IPPROTO_TCP,TCP_KEEPIDLE,v)
 #define socket_set_tcp_keepintvl(fd, v)  socket_setoptint(fd,IPPROTO_TCP,TCP_KEEPINTVL,v)
 #define socket_set_tcp_keepcnt(fd, v)  	 socket_setoptint(fd,IPPROTO_TCP,TCP_KEEPCNT,v)
