@@ -42,7 +42,7 @@ static inline unsigned char *carray_remainptr(struct carray *array) {
 	return array->data + array->point_end;
 }
 
-int carray_remaindata_append(struct carray *array, void *data, int size) {
+static inline int carray_remaindata_append(struct carray *array, void *data, int size) {
 	if (size + array->point_end > array->size)
 		size = array->size - array->point_end;
 
@@ -61,6 +61,10 @@ static inline void carray_usedlen_sub(struct carray *array, int len) {
 		len = array->point_end;
 	memcpy(array->data, array->data + len, array->point_end - len);
 	array->point_end = array->point_end - len;
+}
+
+static inline void *carray_useptr(struct carray *array) {
+	return (void*)array->data;
 }
 
 int fds[2];
