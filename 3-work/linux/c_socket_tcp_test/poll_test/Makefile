@@ -1,5 +1,5 @@
 
-CFLAGS = -O3  -Werror -Wall
+CFLAGS = #-O3  -Werror -Wall
 
 all:
 	gcc -g $(CFLAGS) *.c -o aaa.exe -lpthread

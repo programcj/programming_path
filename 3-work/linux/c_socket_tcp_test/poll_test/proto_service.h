@@ -45,6 +45,8 @@ struct proto_session {
 	struct proto_service_context *context;
 	int fd;
 
+	unsigned short peerport;
+
 	void *user;
 	uint32_t interval_start; //开始时间 ms
 	long interval; // ms

@@ -22,13 +22,13 @@
 #define socket_get_count_in_queue(fd,pending)	ioctl(fd, SIOCINQ, pending)
 
 #define socket_get_error(fd) \
-	({ int err; socklen_t len=sizeof(err); getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&err, &len); err; })
+	({ int v=0; socklen_t len=sizeof(v); int ret=getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&v, &len); ret==-1?ret:v; })
 
 #define socket_get_sendbuf_size(fd) \
-	({ int err; socklen_t len=sizeof(err); getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (void *)&err, &len); err; })
+	({ int v=0; socklen_t len=sizeof(v); int ret=getsockopt(fd, SOL_SOCKET, SO_SNDBUF, (void *)&v, &len); ret==-1?ret:v; })
 
 #define socket_get_rcvbuf_size(fd) 	\
-	({ int err; socklen_t len=sizeof(err); getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void *)&err, &len); err; })
+	({ int v=0; socklen_t len=sizeof(v); int ret= getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void *)&v, &len); ret==-1?ret:v; })
 
 static inline int socket_nosigpipe(int fd, int flag) {
 #ifdef SO_NOSIGPIPE
@@ -38,12 +38,36 @@ static inline int socket_nosigpipe(int fd, int flag) {
 #endif
 }
 
+static inline int socket_getopt(int fd, int opt, int *v) {
+	socklen_t vlen = sizeof(int);
+	return getsockopt(fd, SOL_SOCKET, opt, &v, &vlen);
+}
+
+static inline int socket_get_recvbufforce(int fd) {
+	socklen_t vlen = sizeof(int);
+	int v;
+	int ret = getsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, &v, &vlen);
+	if (ret == -1)
+		return -1;
+	return v;
+}
+
+static inline int socket_get_sendbufforce(int fd) {
+	socklen_t vlen = sizeof(int);
+	int v;
+	int ret = getsockopt(fd, SOL_SOCKET, SO_SNDBUFFORCE, &v, &vlen);
+	if (ret == -1)
+		return -1;
+	return v;
+}
+
 static inline int socket_setoptint(int fd, int leve, int opt, int v) {
 	return setsockopt(fd, leve, opt, (char*) &v, sizeof v);
 }
 
 #define socket_setopt(fd, opt, v) socket_setoptint(fd,SOL_SOCKET,opt,v)
 
+//cat /proc/sys/net/ipv4/tcp_wmem
 //cat /proc/sys/net/core/wmem_max
 //SO_SNDBUFFORCE 可以重写wmem_max限制
 #define socket_set_sendbuf_size(fd, size) \
@@ -163,7 +187,7 @@ static inline void socket_addr_in_set(struct sockaddr_in *addr, int family,
 	addr->sin_family = AF_INET;
 	addr->sin_port = htons(port);
 	if (ipstr) {
-		inet_pton(addr->sin_addr, ipstr, &addr->sin_addr);
+		inet_pton(addr->sin_family, ipstr, &addr->sin_addr);
 	} else
 		addr->sin_addr.s_addr = INADDR_ANY;
 }

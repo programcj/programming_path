@@ -20,9 +20,10 @@
 #ifndef EPOLLEX_H_
 #define EPOLLEX_H_
 
+#include <sys/epoll.h>
+
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 struct epollex {
@@ -39,10 +40,13 @@ int epollex_ctl_mod(struct epollex *ep, int fd, struct epoll_event *ev);
 
 int epollex_ctl_del(struct epollex *ep, int fd);
 
+int epollex_ctl_get(struct epollex *ep, int fd, struct epoll_event *ev);
+
 //add的总个数
 int epollex_count(struct epollex *ep);
 
-
+int epollex_wait(struct epollex *ep, struct epoll_event *__events,
+		int __maxevents, int __timeout);
 
 #ifdef __cplusplus
 }

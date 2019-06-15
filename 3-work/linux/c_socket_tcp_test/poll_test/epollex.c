@@ -57,4 +57,8 @@ int epollex_count(struct epollex *ep) {
 	return ep->event_count;
 }
 
+int epollex_wait(struct epollex *ep, struct epoll_event *__events,
+		int __maxevents, int __timeout) {
+	return epoll_wait(ep->epfd, __events, __maxevents, __timeout);
+}
 

@@ -26,6 +26,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "proto_service.h"
 
@@ -122,6 +123,7 @@ int proto_service_session_timeout_start(struct proto_session *session,
 		int timeout_s) {
 	session->interval_start = proto_service_monotonic_timestamp_ms();
 	session->interval = timeout_s * 1000;
+	printf(".....[%d] %d\n", session->fd, session->interval_start);
 	return 0;
 }
 
@@ -140,7 +142,7 @@ int proto_service_session_is_choke(struct proto_session *session) {
 	if (poll(&pofd, 1, 0) != 1)
 		return 1;
 
-	return pofd.revents & POLLIN ? 0 : 1;
+	return pofd.revents & POLLOUT ? 0 : 1;
 }
 
 void proto_service_signal_quit_wait(struct proto_service_context *context) {
@@ -220,6 +222,10 @@ void proto_service_append_session(struct proto_service_context *context,
 int proto_service_close_session(struct proto_service_context *context,
 		struct proto_session *s) {
 	int ret;
+
+	context->session_count--;
+	context->backfun_rwhandle(context, s, PS_EVENT_SESSION_DESTORY);
+
 	if (s->fd != -1) {
 		s->next->prev = s->prev;
 		s->prev->next = s->next;
@@ -227,8 +233,8 @@ int proto_service_close_session(struct proto_service_context *context,
 	}
 	ret = epoll_ctl(context->epollfd, EPOLL_CTL_DEL, s->fd, NULL);
 	s->fd = -1;
-	context->session_count--;
-	context->backfun_rwhandle(context, s, PS_EVENT_SESSION_DESTORY);
+	//context->session_count--;
+	//context->backfun_rwhandle(context, s, PS_EVENT_SESSION_DESTORY);
 
 	proto_free(s);
 	return ret;
@@ -271,6 +277,7 @@ void proto_service_loop(struct proto_service_context *pser) {
 		{ //寻找最小定时器时间
 			time_interval = proto_service_monotonic_timestamp_ms();
 
+			interval_min = 100;
 			for (sp = pser->session_list_head.next, sn = sp->next;
 					sp != &pser->session_list_head; sp = sn, sn = sp->next) {
 				if (sp->interval_start) {
@@ -279,8 +286,8 @@ void proto_service_loop(struct proto_service_context *pser) {
 				}
 			}
 
-			if (sp == &pser->session_list_head)
-				interval_min = 200; //
+			//if (sp == &pser->session_list_head)
+			//	interval_min = 200; //
 		}
 
 		{ //
@@ -299,6 +306,9 @@ void proto_service_loop(struct proto_service_context *pser) {
 		fdcount = epoll_wait(epollfd, eventall, epollsize, interval_min);
 
 		if (fdcount == -1) {
+			perror("epoll wait...\n");
+			if (errno == EINTR)
+				continue;
 			break;
 		}
 
@@ -308,16 +318,16 @@ void proto_service_loop(struct proto_service_context *pser) {
 		{
 			for (sp = pser->session_list_head.next, sn = sp->next;
 					sp != &pser->session_list_head; sp = sn, sn = sp->next) {
+
 				if (sp->interval_start) {
 					if (time_interval > sp->interval_start + sp->interval) {
 						sp->interval_start = 0;
 						sp->interval = 0;
-
-						ret = pser->backfun_rwhandle(pser, session,
+						ret = pser->backfun_rwhandle(pser, sp,
 								PS_EVENT_TIMEROUT);
 
 						if (ret == -1)
-							proto_service_close_session(pser, session);
+							proto_service_close_session(pser, sp);
 					}
 				}
 			}
@@ -331,7 +341,7 @@ void proto_service_loop(struct proto_service_context *pser) {
 		for (i = 0; i < fdcount; i++) {
 			int listeni;
 
-			//监听处理
+			//监听处理 listen accept handle
 			for (listeni = 0; listeni < pser->listen_fdsize; listeni++) {
 				if (eventall[i].data.fd == pser->listen_fds[listeni]) {
 					if (eventall[i].events & (EPOLLIN | EPOLLPRI)) {
@@ -341,15 +351,18 @@ void proto_service_loop(struct proto_service_context *pser) {
 							socklen_t caddrlen = sizeof(caddr);
 							ev.data.fd = accept(eventall[i].data.fd,
 									(struct sockaddr*) &caddr, &caddrlen);
+
+							if (ev.data.fd == -1)
+								continue;
+
+							session = proto_serssion_new();
+							if (!session) {
+								close(ev.data.fd);
+								continue;
+							}
+							session->peerport = ntohs(caddr.sin_port);
 						}
 
-						if (ev.data.fd == -1)
-							continue;
-						session = proto_serssion_new();
-						if (!session) {
-							close(ev.data.fd);
-							continue;
-						}
 						session->fd = ev.data.fd;
 						socket_nonblock(ev.data.fd, 1);
 
@@ -382,7 +395,7 @@ void proto_service_loop(struct proto_service_context *pser) {
 			if (listeni != pser->listen_fdsize)
 				continue;
 
-			//会话处理
+			//会话处理 event handle
 			session = (struct proto_session *) eventall[i].data.ptr;
 			int fd = session->fd;
 			uint32_t events = eventall[i].events;
