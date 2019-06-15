@@ -67,7 +67,7 @@ static int _webSockServiceCallback(struct lws *wsi,
 				return -1;
 			}
 
-			if (lws_send_pipe_choked(wsi)) {
+			if (lws_send_pipe_choked(wsi)) { //当发送阻塞，20秒超时处理
 				printf("lws_send_pipe_choked  .......\n");
 				lws_set_timeout(wsi, PENDING_TIMEOUT_SENT_CLIENT_HANDSHAKE, 20);
 			}
@@ -100,7 +100,7 @@ static struct lws_protocols protocols[] = { { "myproto",
 NULL, 0, 0 } /* end */
 };
 
-void LxWebSocketClientLoop() {
+void client_loop() {
 	struct lws_context_creation_info info;
 	struct lws_context *context = NULL;
 	struct lws_client_connect_info i;
@@ -126,7 +126,7 @@ void LxWebSocketClientLoop() {
 	i.port = 10086; //
 	i.context = context;
 	i.ssl_connection = 0;
-	i.host = i.address;
+	i.host = "hostname-cn";  //如果有证书，这里设定证书的CN名称
 	i.origin = i.address;
 	i.ietf_version_or_minus_one = -1;
 	i.client_exts = NULL;
@@ -161,3 +161,8 @@ void LxWebSocketClientLoop() {
 
 }
 
+
+int main(int argc, char **argv) {
+	client_loop();
+	return 0;
+}
