@@ -319,6 +319,7 @@ static inline int io_mkfifo_create(const char *name, int mode) {
 #include <fcntl.h>
 
 #define io_open(name, flag, ...)	open(name, flag, ##__VA_ARGS__)
+#define io_copyfd(fd)	dup(fd)
 /**
  * $man open
  * flags:

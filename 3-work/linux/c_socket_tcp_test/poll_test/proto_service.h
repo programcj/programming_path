@@ -45,7 +45,7 @@ struct proto_session {
 	int fd;
 
 	unsigned short peerport;
-
+	int async_close;
 	void *user;
 	uint32_t interval_start; //开始时间 ms
 	long interval; // ms
@@ -73,6 +73,8 @@ struct proto_service_context {
 	int (*backfun_rwhandle)(struct proto_service_context *context,
 			struct proto_session *session, int event);
 };
+
+#include <stdlib.h>
 
 void *proto_malloc(size_t size);
 void proto_free(void *ptr);

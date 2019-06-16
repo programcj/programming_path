@@ -277,12 +277,6 @@ int proto_service_loop(struct proto_service_context *context) {
 
 	epollfd = context->epollfd;
 
-	if (!context->epoll_events) {
-		context->epoll_events_count = context->listen_fdsize;
-		context->epoll_events = malloc(
-				context->epoll_events_count * sizeof(struct epoll_event));
-	}
-
 	struct proto_session *session = NULL, *sn = NULL, *sp = NULL;
 	int interval_min = 100;
 
@@ -292,14 +286,22 @@ int proto_service_loop(struct proto_service_context *context) {
 		interval_min = 100;
 		for (sp = context->session_list_head.next, sn = sp->next;
 				sp != &context->session_list_head; sp = sn, sn = sp->next) {
-			if (sp->interval_start) {
+			if (sp->async_close) { //异步关闭功能
+				_proto_service_close_session(context, sp);
+			} else if (sp->interval_start) {
 				if (interval_min > sp->interval)
 					interval_min = sp->interval;
 			}
 		}
 	}
 
-	{ //
+	//构建epoll events
+	if (!context->epoll_events) {
+		context->epoll_events_count = context->listen_fdsize;
+		context->epoll_events = malloc(
+				context->epoll_events_count * sizeof(struct epoll_event));
+	}
+	{
 		epollsize1 = context->listen_fdsize + context->session_count;
 
 		if (context->epoll_events_count != epollsize1) {

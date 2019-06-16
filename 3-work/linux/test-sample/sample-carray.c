@@ -137,7 +137,6 @@ int main(void) {
 		//decode rtsp url
 		//function: OPTIONS
 		//url: rtsp://
-
 	} while (0);
 
 	return EXIT_SUCCESS;
