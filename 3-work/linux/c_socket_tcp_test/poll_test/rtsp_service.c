@@ -25,8 +25,7 @@ struct rtsp_session {
 #define CONFIG_SESSION_RWBUFF_SIZE	1024
 
 struct rtsp_session *rtsp_session_new() {
-	struct rtsp_session *session = (struct rtsp_session *) calloc(1,
-			sizeof(struct rtsp_session));
+	struct rtsp_session *session = (struct rtsp_session *) calloc(1, sizeof(struct rtsp_session));
 	if (session) {
 		cache_array_init(&session->in_array, CONFIG_SESSION_RWBUFF_SIZE);
 		cache_array_init(&session->out_array, CONFIG_SESSION_RWBUFF_SIZE);
@@ -62,8 +61,8 @@ char *strhttp_head_end(char *strhead, int length) {
 	return NULL;
 }
 
-int strhttp_head_getvalueint(const char *httphead, const char *httpend,
-		const char *name, int defvalue) {
+int strhttp_head_getvalueint(const char *httphead, const char *httpend, const char *name,
+		int defvalue) {
 	const char *item = httphead;
 	const char *lineend = NULL;
 	int value;
@@ -91,8 +90,8 @@ int strhttp_head_getvalueint(const char *httphead, const char *httpend,
 	return defvalue;
 }
 
-int strhttp_head_getvaluestr(const char *httphead, const char *httpend,
-		const char *name, char *value, int len) {
+int strhttp_head_getvaluestr(const char *httphead, const char *httpend, const char *name,
+		char *value, int len) {
 	const char *item = httphead;
 	const char *lineend = NULL;
 
@@ -110,8 +109,7 @@ int strhttp_head_getvaluestr(const char *httphead, const char *httpend,
 				item += strlen(name);
 				while (*item == ':' || *item == ' ')
 					item++;
-				while (item < httpend && *item != '\r' && *item != '\n'
-						&& len > 0) {
+				while (item < httpend && *item != '\r' && *item != '\n' && len > 0) {
 					*value++ = *item++;
 					len--;
 				}
@@ -160,7 +158,7 @@ void OPTIONS_handle(struct rtsp_session *rtspsession, const char *strheaditem,
 //ffplay rtsp://127.0.0.1:8880/Demo.264
 int socket_fd_printf(int fd, const char *format, ...) {
 	int fdn = dup(fd);
-	FILE fp = fdopen(fdn, "w");
+	FILE *fp = fdopen(fdn, "w");
 	va_list v;
 	int ret = 0;
 	va_start(v, format);
@@ -174,8 +172,12 @@ int socket_fd_writestr(int fd, const char *str) {
 	return send(fd, str, strlen(str), 0);
 }
 
-void DESCRIBE_handler(struct rtsp_session *rtspsession, const char *url,
-		const char *strheaditem, const char *strheadend) {
+int write_str(int fd, const char *str) {
+	return write(fd, str, strlen(str));
+}
+
+void DESCRIBE_handler(struct rtsp_session *rtspsession, const char *url, const char *strheaditem,
+		const char *strheadend) {
 	//ffmpeg -rtsp_transport tcp -i rtsp://184.72.239.149:554/vod/mp4://BigBuckBunny_175k.mov
 //DESCRIBE rtsp://184.72.239.149:554/vod/mp4://BigBuckBunny_175k.mov RTSP/1.0
 //Accept: application/sdp
@@ -186,6 +188,37 @@ void DESCRIBE_handler(struct rtsp_session *rtspsession, const char *url,
 	char strtmp[10];
 	int fd = rtspsession->tcpsession->fd;
 	int content_len = 0;
+	char *content_str = NULL;
+	//内容长度如何计算?
+	int fds[2];
+	pipe(fds);
+
+	write_str(fds[1], "v=0\r\n");
+	write_str(fds[1], "o=- 1560679407630764 1 IN IP4 127.0.1.1\r\n");
+	write_str(fds[1], "s=H.264 Video, streamed by the LIVE555 Media Server\r\n");
+	write_str(fds[1], "i=Demo.264\r\n");
+	write_str(fds[1], "t=0 0\r\n");
+	write_str(fds[1], "a=tool:LIVE555 Streaming Media v2018.08.28\r\n");
+	write_str(fds[1], "a=type:broadcast\r\n");
+	write_str(fds[1], "a=control:*\r\n");
+	write_str(fds[1], "a=range:npt=0-\r\n");
+	write_str(fds[1], "a=x-qt-text-nam:H.264 Video, streamed by the LIVE555 Media Server\r\n");
+	write_str(fds[1], "a=x-qt-text-inf:Demo.264\r\n");
+	write_str(fds[1], "m=video 0 RTP/AVP 96\r\n");
+	write_str(fds[1], "c=IN IP4 0.0.0.0\r\n");
+	write_str(fds[1], "b=AS:500\r\n");
+	write_str(fds[1], "a=rtpmap:96 H264/90000\r\n");
+	write_str(fds[1],
+			"a=fmtp:96 packetization-mode=1;profile-level-id=4D401E;sprop-parameter-sets=J01AHqkYMB73oA==,KM4C+IA=\r\n");
+	write_str(fds[1], "a=control:track1\r\n");
+
+	socket_get_count_in_queue(fds[0], &content_len);
+	if (content_len > 0) {
+		content_str = (char*) malloc(content_len);
+		read(fds[0], content_str, content_len);
+	}
+	close(fds[0]);
+	close(fds[1]);
 
 	socket_fd_writestr(fd, "RTSP/1.0 200 OK\r\n");
 	sprintf(strtmp, "CSeq:%d\r\n", rtspsession->cseq);
@@ -198,39 +231,23 @@ void DESCRIBE_handler(struct rtsp_session *rtspsession, const char *url,
 	sprintf(strtmp, "Content-Length: %d\r\n", content_len);
 	socket_fd_writestr(fd, strtmp);
 	socket_fd_writestr(fd, "\r\n");
-//
-//v=0
-//o=- 1560679407630764 1 IN IP4 127.0.1.1
-//s=H.264 Video, streamed by the LIVE555 Media Server
-//i=Demo.264
-//t=0 0
-//a=tool:LIVE555 Streaming Media v2018.08.28
-//a=type:broadcast
-//a=control:*
-//a=range:npt=0-
-//a=x-qt-text-nam:H.264 Video, streamed by the LIVE555 Media Server
-//a=x-qt-text-inf:Demo.264
-//m=video 0 RTP/AVP 96
-//c=IN IP4 0.0.0.0
-//b=AS:500
-//a=rtpmap:96 H264/90000
-//a=fmtp:96 packetization-mode=1;profile-level-id=4D401E;sprop-parameter-sets=J01AHqkYMB73oA==,KM4C+IA=
-//a=control:track1
+	socket_fd_writestr(fd, content_str);
+	if (content_str) {
+		free(content_str);
+	}
 }
 
 //25fps //
 int rtsp_handle(struct rtsp_session *rtspsession) {
 	char *strhttphead = (char*) cache_array_useptr(&rtspsession->in_array);
-	char *strhttpend = strhttp_head_end(strhttphead,
-			cache_array_uselen(&rtspsession->in_array));
+	char *strhttpend = strhttp_head_end(strhttphead, cache_array_uselen(&rtspsession->in_array));
 
 	if (!strhttpend)
 		return 0;
 
 	if (strhttpend) {
 		printf("http head ok ---- \n");
-		for (char *ptr = cache_array_useptr(&rtspsession->in_array);
-				ptr < strhttpend; ptr++) {
+		for (char *ptr = cache_array_useptr(&rtspsession->in_array); ptr < strhttpend; ptr++) {
 			if (*ptr == '\r')
 				continue;
 			printf("%c", *ptr);
@@ -283,8 +300,8 @@ int rtsp_handle(struct rtsp_session *rtspsession) {
 	return 0;
 }
 
-int rtsp_service_rwhandle(struct proto_service_context *context,
-		struct proto_session *session, int event) {
+int rtsp_service_rwhandle(struct proto_service_context *context, struct proto_session *session,
+		int event) {
 	int ret = 0;
 	int fd = session->fd;
 
@@ -311,8 +328,7 @@ int rtsp_service_rwhandle(struct proto_service_context *context,
 		struct rtsp_session *rtspsession = (struct rtsp_session *) session->user;
 
 		if (cache_array_remainlen(&rtspsession->in_array) == 0) {
-			printf(
-					"--------------------------------cache_array_remainlen_tran...\n");
+			printf("--------------------------------cache_array_remainlen_tran...\n");
 			if (0 == cache_array_remainlen_tran(&rtspsession->in_array)) {
 				fprintf(stderr, "recv buff over\n");
 				return -1;
@@ -322,8 +338,7 @@ int rtsp_service_rwhandle(struct proto_service_context *context,
 		ret = recv(fd, cache_array_remainptr(&rtspsession->in_array),
 				cache_array_remainlen(&rtspsession->in_array), 0);
 		if (ret == 0) {
-			fprintf(stderr, "recv ret=0 fd=%d err=%d\n", fd,
-					socket_get_error(fd));
+			fprintf(stderr, "recv ret=0 fd=%d err=%d\n", fd, socket_get_error(fd));
 			return -1;
 		}
 		if (ret == -1) {
@@ -353,8 +368,7 @@ int rtsp_service_rwhandle(struct proto_service_context *context,
 		ret = send(fd, cache_array_useptr(&rtspsession->out_array),
 				cache_array_uselen(&rtspsession->out_array), 0);
 		if (ret == 0) {
-			fprintf(stderr, "recv ret=0 fd=%d err=%d\n", fd,
-					socket_get_error(fd));
+			fprintf(stderr, "recv ret=0 fd=%d err=%d\n", fd, socket_get_error(fd));
 			return -1;
 		}
 		if (ret == -1) {
@@ -392,8 +406,7 @@ int rtsp_service_rwhandle(struct proto_service_context *context,
 	case PS_EVENT_TIMEROUT: {
 		struct rtsp_session *rtspsession = (struct rtsp_session *) session->user;
 		printf("PS_EVENT_TIMEROUT fd=%d\n", fd);
-		printf("ret=%d , is choke:%d  uselen:%d\n", ret,
-				proto_service_session_is_choke(session),
+		printf("ret=%d , is choke:%d  uselen:%d\n", ret, proto_service_session_is_choke(session),
 				cache_array_uselen(&rtspsession->in_array));
 		proto_service_on_write(context, session, 1);
 	}
@@ -410,12 +423,46 @@ void rtsp_service_test() {
 	char *buff =
 			"OPTIONS rtsp://127.0.0.1:8880/Demo.264 RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: Lavf56.40.101\r\n\r\n";
 
-	struct rtsp_session *rtspsession =
-			(struct rtsp_session *) rtsp_session_new();
+	struct rtsp_session *rtspsession = (struct rtsp_session *) rtsp_session_new();
 
 	strcpy(cache_array_remainptr(&rtspsession->in_array), buff);
 	cache_array_uselen_add(&rtspsession->in_array, strlen(buff));
 
+	char *content_str = NULL;
+	int content_len = 0;
+	int fds[2];
+	pipe(fds);
+
+	write_str(fds[1], "v=0\r\n");
+	write_str(fds[1], "o=- 1560679407630764 1 IN IP4 127.0.1.1\r\n");
+	write_str(fds[1], "s=H.264 Video, streamed by the LIVE555 Media Server\r\n");
+	write_str(fds[1], "i=Demo.264\r\n");
+	write_str(fds[1], "t=0 0\r\n");
+	write_str(fds[1], "a=tool:LIVE555 Streaming Media v2018.08.28\r\n");
+	write_str(fds[1], "a=type:broadcast\r\n");
+	write_str(fds[1], "a=control:*\r\n");
+	write_str(fds[1], "a=range:npt=0-\r\n");
+	write_str(fds[1], "a=x-qt-text-nam:H.264 Video, streamed by the LIVE555 Media Server\r\n");
+	write_str(fds[1], "a=x-qt-text-inf:Demo.264\r\n");
+	write_str(fds[1], "m=video 0 RTP/AVP 96\r\n");
+	write_str(fds[1], "c=IN IP4 0.0.0.0\r\n");
+	write_str(fds[1], "b=AS:500\r\n");
+	write_str(fds[1], "a=rtpmap:96 H264/90000\r\n");
+	write_str(fds[1],
+			"a=fmtp:96 packetization-mode=1;profile-level-id=4D401E;sprop-parameter-sets=J01AHqkYMB73oA==,KM4C+IA=\r\n");
+	write_str(fds[1], "a=control:track1\r\n");
+
+	socket_get_count_in_queue(fds[0], &content_len);
+	if (content_len > 0) {
+		content_str = (char*) malloc(content_len);
+		read(fds[0], content_str, content_len);
+	}
+	close(fds[0]);
+	close(fds[1]);
+
+	if (content_str) {
+		printf("content_str=[%s]", content_str);
+	}
 	rtsp_handle(rtspsession);
 	//exit(1);
 }
