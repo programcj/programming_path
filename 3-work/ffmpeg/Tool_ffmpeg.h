@@ -1,7 +1,7 @@
 /*
  * Tool_ffmpeg.h
  *
- *  Created on: 2019Äê6ÔÂ25ÈÕ
+ *  Created on: 2019å¹´6æœˆ25æ—¥
  *      Author: cc
  *
  *                .-~~~~~~~~~-._       _.-~~~~~~~~~-.
@@ -14,7 +14,7 @@
  *.'______________________________\|/______________________________`.
  *.'_________________________________________________________________`.
  * 
- * Çë×¢Òâ±àÂë¸ñÊ½
+ * è¯·æ³¨æ„ç¼–ç æ ¼å¼
  */
 
 #ifndef APP_TOOL_FFMPEG_H_
@@ -52,7 +52,7 @@ int FFmpegMJPEGDecoder_DecoderJPGData(struct FFmpegMJPEGDecoder *ffDecoder,
 
 void FFmpegMJPEGDecoder_Destory(struct FFmpegMJPEGDecoder *fdec);
 
-//ffmpeg ½âÂëjpgÍ¼Æ¬
+//ffmpeg è§£ç jpgå›¾ç‰‡
 // AVFrame *j420pFrame= av_frame_alloc();
 // if( ffmpeg_DecodeJpgDataToAVFrame(jdata, jsize, j420pFrame) ==0) )
 // {  ...decode ok }

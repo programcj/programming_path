@@ -79,7 +79,47 @@ void av_frame_save_jpg(const char *filename, AVFrame *frame) {
 	avcodec_free_context(&pCodecCtx);
 }
 
-int yuv420_crop(AVFrame *srcFrame, AVFrame *dscFrame, int x, int y) {
+//nv12裁剪成yuv420p格式
+//@cropx cropy 裁剪起点，必须为偶数，否则UV和Y会有偏差
+//@dscw dsch 裁剪出来的照片宽高，必须为偶数，否则UV和Y会有偏差
+//注意点，linesize的对其为1，如果目标为ffmpeg的avframe，必须加linesize，NV12数据格式如 4*4
+//Y  Y  Y  Y
+//Y  Y  Y  Y
+//Y  Y  Y  Y
+//Y  Y  Y  Y
+//U  V  U  V
+//U  V  U  V
+int image_crop_nv12to420p(uint8_t *nv12data, int width, int height, int cropx, int cropy,
+		uint8_t *yuv420pdata, int dscw, int dsch) {
+	uint8_t *ptry = yuv420pdata, *ptru, *ptrv;
+	uint8_t *nvptr = nv12data + width * height;
+
+	ptry = yuv420pdata;
+	ptru = yuv420pdata + dscw * dsch; //u
+	ptrv = ptru + (dscw * dsch) / 4; //v (420P的U分量1字节对其为(w*h)/4)
+
+	for (int y = cropy; y < dsch + cropy /*pFrame->height*/; y++) {
+		memcpy(ptry, nv12data + y * width + cropx, dscw);
+		ptry += dscw;
+	}
+
+	for (int nvy = cropy / 2; nvy < dsch / 2 + cropy / 2 /*height / 2*/; nvy++) {
+		for (int nvx = cropx; nvx < dscw + cropx; nvx++) {
+			//如果目标是ffmpeg的avframe则需要注意的是linesize
+			if (nvx % 2 == 0) {
+				*ptru++ = nvptr[nvy * width + nvx]; //u
+			} else {
+				*ptrv++ = nvptr[nvy * width + nvx]; //v
+			}
+		}
+	}
+	return 0;
+}
+
+/**
+ * x y dscFrame->width dscFrame->height is %2==0
+ */
+int image_crop_yuv420p(AVFrame *srcFrame, AVFrame *dscFrame, int x, int y) {
 	int yuv_y = 0;
 	int yuv_uv = 0;
 	void *ptr_y, *ptr_u, *ptr_v;
@@ -87,8 +127,7 @@ int yuv420_crop(AVFrame *srcFrame, AVFrame *dscFrame, int x, int y) {
 	ptr_y = dscFrame->data[0];
 
 	for (yuv_y = y; yuv_y < y + dscFrame->height; yuv_y++) {
-		memcpy(ptr_y, srcFrame->data[0] + yuv_y * srcFrame->linesize[0] + x,
-				dscFrame->width);
+		memcpy(ptr_y, srcFrame->data[0] + yuv_y * srcFrame->linesize[0] + x, dscFrame->width);
 
 		ptr_y += dscFrame->linesize[0];
 	}
@@ -97,12 +136,10 @@ int yuv420_crop(AVFrame *srcFrame, AVFrame *dscFrame, int x, int y) {
 	ptr_v = dscFrame->data[2];
 
 	for (yuv_uv = y / 2; yuv_uv < (y / 2 + dscFrame->height / 2); yuv_uv++) {
-		memcpy(ptr_u,
-				srcFrame->data[1] + yuv_uv * srcFrame->linesize[1] + x / 2,
+		memcpy(ptr_u, srcFrame->data[1] + yuv_uv * srcFrame->linesize[1] + x / 2,
 				dscFrame->width / 2);
 
-		memcpy(ptr_v,
-				srcFrame->data[2] + yuv_uv * srcFrame->linesize[2] + x / 2,
+		memcpy(ptr_v, srcFrame->data[2] + yuv_uv * srcFrame->linesize[2] + x / 2,
 				dscFrame->width / 2);
 
 		ptr_u += dscFrame->linesize[1];
@@ -131,8 +168,8 @@ void jpg_decode_data(void *data, int size) {
 		ret = avcodec_send_packet(pCodecCtx, &picPacket);
 		ret = avcodec_receive_frame(pCodecCtx, pAvFrame);
 		printf("decode=%s WH:%dx%d\n",
-				av_pix_fmt_desc_get((enum AVPixelFormat) pAvFrame->format)->name,
-				pAvFrame->width, pAvFrame->height); //解码
+				av_pix_fmt_desc_get((enum AVPixelFormat) pAvFrame->format)->name, pAvFrame->width,
+				pAvFrame->height); //解码
 		//
 		{
 			AVFrame *dscFrame = av_frame_alloc();
@@ -148,7 +185,7 @@ void jpg_decode_data(void *data, int size) {
 
 			av_frame_save_jpg("/tmp/0.jpg", pAvFrame);
 
-			yuv420_crop(pAvFrame, dscFrame, 10, 600);
+			image_crop_yuv420p(pAvFrame, dscFrame, 10, 600);
 
 			printf("start save...\n");
 			av_frame_save_jpg("/tmp/crop-0.jpg", dscFrame);
