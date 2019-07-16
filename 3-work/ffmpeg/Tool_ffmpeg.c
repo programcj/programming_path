@@ -1,7 +1,7 @@
 /*
  * Tool_ffmpeg.c
  *
- *  Created on: 2019Äê6ÔÂ25ÈÕ
+ *  Created on: 2019å¹´6æœˆ25æ—¥
  *      Author: cc
  *
  *                .-~~~~~~~~~-._       _.-~~~~~~~~~-.
@@ -14,7 +14,7 @@
  *.'______________________________\|/______________________________`.
  *.'_________________________________________________________________`.
  * 
- * Çë×¢Òâ±àÂë¸ñÊ½utf8
+ * è¯·æ³¨æ„ç¼–ç æ ¼å¼utf8
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,11 +35,11 @@ int FFmpegMJPEGDecoder_Init(struct FFmpegMJPEGDecoder *fdec)
 	int ret = 0;
 	memset(fdec, 0, sizeof(struct FFmpegMJPEGDecoder));
 	fdec->pCodec = avcodec_find_decoder(AV_CODEC_ID_MJPEG);
-	fdec->pCodecCtx = avcodec_alloc_context3(fdec->pCodec); //½âÂëÆ÷³õÊ¼»¯
+	fdec->pCodecCtx = avcodec_alloc_context3(fdec->pCodec); //è§£ç å™¨åˆå§‹åŒ–
 	if (!fdec->pCodecCtx)
 		return -1;
 
-	ret = avcodec_open2(fdec->pCodecCtx, fdec->pCodec, NULL);  //´ò¿ª½âÂëÆ÷
+	ret = avcodec_open2(fdec->pCodecCtx, fdec->pCodec, NULL);  //æ‰“å¼€è§£ç å™¨
 	if (ret < 0)
 	{
 		av_log(fdec->pCodecCtx, AV_LOG_ERROR, "Can't open decoder\n");
@@ -81,7 +81,7 @@ void FFmpegMJPEGDecoder_Destory(struct FFmpegMJPEGDecoder *fdec)
 	av_frame_free(&fdec->j420pFrame);
 }
 
-//ffmpeg ½âÂëjpgÍ¼Æ¬
+//ffmpeg è§£ç jpgå›¾ç‰‡
 // AVFrame *j420pFrame= av_frame_alloc();
 // if( ffmpeg_DecodeJpgDataToAVFrame(jdata, jsize, j420pFrame) ==0) )
 // {  ...decode ok }
@@ -100,7 +100,7 @@ int ffmpeg_DecodeJpgDataToAVFrame(void *jdata, int jsize, AVFrame *j420pFrame)
 		return -1;
 	}
 
-	pCodecCtx = avcodec_alloc_context3(pCodec); //½âÂëÆ÷³õÊ¼»¯
+	pCodecCtx = avcodec_alloc_context3(pCodec); //è§£ç å™¨åˆå§‹åŒ–
 	if (!pCodecCtx)
 	{
 		fprintf(stderr, "[ffmpeg-avcode] mjpeg not alloc context\n");
@@ -109,7 +109,7 @@ int ffmpeg_DecodeJpgDataToAVFrame(void *jdata, int jsize, AVFrame *j420pFrame)
 
 	AVDictionary *opts = NULL;
 
-	ret = avcodec_open2(pCodecCtx, pCodec, &opts);  //´ò¿ª½âÂëÆ÷
+	ret = avcodec_open2(pCodecCtx, pCodec, &opts);  //æ‰“å¼€è§£ç å™¨
 	if (ret != 0)
 	{
 		fprintf(stderr, "[ffmpeg-avcode] mjpeg not open context\n");
@@ -183,7 +183,7 @@ int ffmpeg_YUVJ420PAVFrameToJpgData(AVFrame *frame,
 	pCodecCtx->time_base.num = 1;
 	pCodecCtx->time_base.den = 25;
 
-	// ÉèÖÃpCodecCtxµÄ±àÂëÆ÷ÎªpCodec
+	// è®¾ç½®pCodecCtxçš„ç¼–ç å™¨ä¸ºpCodec
 	if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0)
 	{
 		fprintf(stderr, "[ffmpeg-avcodec] Could not open codec ! \n");
@@ -277,7 +277,7 @@ int ffmpeg_AVFrameSaveJpgFile(AVFrame *srcframe, const char *filename)
 	pCodecCtx->time_base.num = 1;
 	pCodecCtx->time_base.den = 25;
 
-	// ÉèÖÃpCodecCtxµÄ±àÂëÆ÷ÎªpCodec
+	// è®¾ç½®pCodecCtxçš„ç¼–ç å™¨ä¸ºpCodec
 	if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0)
 	{
 		fprintf(stderr, "[ffmpeg-avcodec] Could not open codec ! \n");
@@ -354,7 +354,7 @@ int ffmpeg_YUVJ420PAVFrameToJpgAVPacket(AVFrame *frame, AVPacket *avpkt)
 	pCodecCtx->time_base.num = 1;
 	pCodecCtx->time_base.den = 25;
 
-	// ÉèÖÃpCodecCtxµÄ±àÂëÆ÷ÎªpCodec
+	// è®¾ç½®pCodecCtxçš„ç¼–ç å™¨ä¸ºpCodec
 	if (avcodec_open2(pCodecCtx, pCodec, NULL) < 0)
 	{
 		fprintf(stderr, "[ffmpeg-avcodec] Could not open codec ! \n");
