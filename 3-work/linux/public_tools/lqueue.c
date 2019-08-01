@@ -66,13 +66,24 @@ void os_event_cond_destory(struct os_event_cond *p) {
 	p->initflag = 0;
 }
 
-int os_event_cond_signal(struct os_event_cond *p) {
+int os_event_cond_notify_all(struct os_event_cond *p)
+{
 	int ret = 0;
 	if (!p->initflag)
 		return -1;
 
 	ret = pthread_mutex_lock(&p->smutex);/*锁住互斥量*/
-	//pthread_cond_broadcast(&cond);
+	ret = pthread_cond_broadcast(&p->scond);/*条件改变，发送信号，通知t_b进程*/
+	ret = pthread_mutex_unlock(&p->smutex);/*解锁互斥量*/
+	return ret;
+}
+
+int os_event_cond_notify(struct os_event_cond *p) {
+	int ret = 0;
+	if (!p->initflag)
+		return -1;
+
+	ret = pthread_mutex_lock(&p->smutex);/*锁住互斥量*/
 	ret = pthread_cond_signal(&p->scond);/*条件改变，发送信号，通知t_b进程*/
 	ret = pthread_mutex_unlock(&p->smutex);/*解锁互斥量*/
 	return ret;
