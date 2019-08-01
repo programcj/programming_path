@@ -3,6 +3,7 @@
  *
  *  Created on: 2017年3月25日
  *      Author: cj
+ *  时间,级别[模块]文件,行,[函数]:消息
  */
 
 #ifndef SRC_CLOG_H_
