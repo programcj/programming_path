@@ -2,7 +2,26 @@
   "tasks": [
     {
       "type": "shell",
-      "label": "gcc build active file",
+      "label": "clear exe file",
+      "command": "rm",
+      "args": [
+        "${fileDirname}/${fileBasenameNoExtension}.exe"     
+      ]
+    },
+    {
+      "type": "shell",
+      "label": "build instance file",
+      "command": "/usr/bin/gcc",
+      "args": [
+        "-g",
+        "${file}",
+        "-o",
+        "${fileDirname}/${fileBasenameNoExtension}.exe"
+      ]
+    },
+    {
+      "type": "shell",
+      "label": "gcc ffmpeg fun to exe",
       "command": "/usr/bin/gcc",
       "args": [
         "-g",
@@ -12,11 +31,11 @@
         "-lcurl",
         "-lpthread",
         "-I/home/cc/ffmpeg/install/include",
-        "-L/home/cc/ffmpeg/install/lib",        
+        "-L/home/cc/ffmpeg/install/lib",
         "-lavformat",
         "-lavdevice",
         "-lavfilter",
-        "-lavcodec",                  
+        "-lavcodec",
         "-lavutil",
         "-lswresample",
         "-lswscale",
@@ -27,7 +46,10 @@
       ],
       "options": {
         "cwd": "/usr/bin"
-      }
+      },
+      "problemMatcher": [
+        "$gcc"
+      ]
     }
   ],
   "version": "2.0.0"

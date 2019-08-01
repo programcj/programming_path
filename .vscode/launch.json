@@ -23,7 +23,7 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "gcc build active file",
+            "preLaunchTask": "gcc ffmpeg fun to exe",
             "miDebuggerPath": "/usr/bin/gdb"
         }
     ]
