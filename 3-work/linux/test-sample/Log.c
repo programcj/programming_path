@@ -67,7 +67,7 @@ static void fifoCheck()
 
 }
 
-static int _getCurrTime(char timeStr[30])
+static int _getCurrTime(char timestr[30])
 {
 	struct tm t_tm;
 	struct timeval tp;
@@ -75,9 +75,11 @@ static int _getCurrTime(char timeStr[30])
 	gettimeofday(&tp, NULL);
 	localtime_r(&tp.tv_sec, &t_tm);
 
-	snprintf(timeStr, 30, "[%4d/%02d/%02d %02d:%02d:%02d:%ld]",
-			t_tm.tm_year + 1900, t_tm.tm_mon + 1, t_tm.tm_mday, t_tm.tm_hour,
-			t_tm.tm_min, t_tm.tm_sec, tp.tv_usec / 100);
+ 	strftime(timestr, sizeof(timestr), "[%F %T]", &t_tm);
+
+	// snprintf(timestr, 30, "[%4d/%02d/%02d %02d:%02d:%02d:%ld]",
+	// 		t_tm.tm_year + 1900, t_tm.tm_mon + 1, t_tm.tm_mday, t_tm.tm_hour,
+	// 		t_tm.tm_min, t_tm.tm_sec, tp.tv_usec / 100);
 	return 0;
 }
 
