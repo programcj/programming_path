@@ -20,17 +20,17 @@
 #ifndef APP_TOOL_FFMPEG_H_
 #define APP_TOOL_FFMPEG_H_
 
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
 #include "libavformat/avformat.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/time.h"
 #include "libswscale/swscale.h"
 #include "libavutil/pixfmt.h"
-
-#ifdef __cplusplus
-extern "C"
-{
-#endif
 
 struct FFmpegMJPEGDecoder
 {
@@ -90,8 +90,18 @@ int ffmpeg_AVFrameSaveJpgFile(AVFrame *srcframe, const char *filename);
 //av_packet_unref(&avpkt);
 int ffmpeg_YUVJ420PAVFrameToJpgAVPacket(AVFrame *frame, AVPacket *avpkt);
 
+int ffmpeg_NV12ToYuv420p(const unsigned char* image_src,
+		unsigned char* image_dst, int image_width, int image_height);
+
+int ffmpeg_AVFrame_NV12ToYUV420P(AVFrame *nv12frame, AVFrame *yuv420pframe);
+
+void ffmpeg_Yuv420pFrameToNV12Data(AVFrame *yuv420pframe, uint8_t *dscNv12Data);
+
+int ffmpeg_NV12ToYUV420PFrame(uint8_t *data, int w, int h, AVFrame *j420pFrame);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* APP_TOOL_FFMPEG_H_ */
+

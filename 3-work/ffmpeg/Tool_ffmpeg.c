@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include "Tool_ffmpeg.h"
 
@@ -129,7 +130,7 @@ int ffmpeg_DecodeJpgDataToAVFrame(void *jdata, int jsize, AVFrame *j420pFrame)
 
 	avcodec_close(pCodecCtx);
 	avcodec_free_context(&pCodecCtx);
-	return 0;
+	return ret;
 }
 
 //
@@ -308,21 +309,26 @@ int ffmpeg_AVFrameSaveJpgFile(AVFrame *srcframe, const char *filename)
 		}
 
 		{
-			int fd = open(filename, O_RDWR | O_CREAT);
+#if 1
+			int fd = open(filename, O_RDWR | O_CREAT,
+			S_IRWXU | S_IRWXG | S_IRWXO);
 			if (fd > 0)
 			{
 				write(fd, pkt.data, pkt.size);
 				fsync(fd);
 				close(fd);
 			}
-//			FILE *fp = fopen(filename, "wb");
-//			if (fp)
-//			{
-//				fwrite(pkt.data, 1, pkt.size, fp);
-//				fclose(fp);
-//				ret = 0;
-//			}
+#else
+			FILE *fp = fopen(filename, "wb");
+			if (fp)
+			{
+				fwrite(pkt.data, 1, pkt.size, fp);
+				fclose(fp);
+				ret = 0;
+			}
+#endif
 		}
+
 	}
 
 	if (frame)
@@ -334,6 +340,13 @@ int ffmpeg_AVFrameSaveJpgFile(AVFrame *srcframe, const char *filename)
 	return ret;
 }
 
+/*
+AVPacket avpkt;
+av_init_packet(&avpkt);
+avpkt.data = NULL;
+avpkt.size = 0;
+av_packet_unref(&avpkt);
+*/
 int ffmpeg_YUVJ420PAVFrameToJpgAVPacket(AVFrame *frame, AVPacket *avpkt)
 {
 	AVCodec *pCodec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
@@ -383,4 +396,157 @@ int ffmpeg_YUVJ420PAVFrameToJpgAVPacket(AVFrame *frame, AVPacket *avpkt)
 	return ret;
 }
 
+//align=1
+int ffmpeg_NV12ToYuv420p(const unsigned char* image_src,
+		unsigned char* image_dst, int image_width, int image_height)
+{
+	const unsigned char* pNV = image_src + image_width * image_height;
+	unsigned char* pU = image_dst + image_width * image_height;
+	unsigned char* pV = image_dst + image_width * image_height
+			+ ((image_width * image_height) >> 2);
+
+	memcpy(image_dst, image_src, image_width * image_height * 3 / 2);
+
+//NV12
+//Y Y Y Y
+//Y Y Y Y
+//Y Y Y Y
+//Y Y Y Y
+//U V U V
+//U V U V
+	for (int i = 0; i < (image_width * image_height) / 2; i++)
+	{
+		if ((i % 2) == 0)
+			*pU++ = *(pNV + i);
+		else
+			*pV++ = *(pNV + i);
+	}
+	return 0;
+}
+
+//注意 align=1 这样yuv420pframe->linesize[1]=w/2 复制uv时就不用关心linesize
+void ffmpeg_Yuv420pFrameToNV12Data(AVFrame *yuv420pframe, uint8_t *dscNv12Data)
+{
+	unsigned char *srcY = yuv420pframe->data[0];
+	unsigned char *srcU = yuv420pframe->data[1];
+	unsigned char *srcV = yuv420pframe->data[2];
+	unsigned char *dstNV = dscNv12Data
+			+ yuv420pframe->width * yuv420pframe->height;
+	int y_h = 0;
+	int u_h = 0;
+	unsigned char *dstY = dscNv12Data;
+
+	for (y_h = 0; y_h < yuv420pframe->height; y_h++)
+	{
+		memcpy(dstY, srcY, yuv420pframe->width);
+		srcY += yuv420pframe->linesize[0];
+		dstY += yuv420pframe->width;
+	}
+
+	int u_w = 0;
+	for (u_h = 0; u_h < yuv420pframe->height / 2; u_h++)
+	{
+		for (u_w = 0; u_w < yuv420pframe->width / 2; u_w++)
+		{
+			(*dstNV++) = srcU[u_w];
+			(*dstNV++) = srcV[u_w];
+		}
+		srcU+=yuv420pframe->linesize[1];
+		srcV+=yuv420pframe->linesize[2];
+	}
+}
+
+//align=1
+//int ffmpeg_NV12ToYUV420(uint8_t *data, int w, int h, void *dsc, int align)
+//{
+//	uint8_t *ptr_u = 0;
+//	uint8_t *ptr_v = 0;
+//	uint8_t *nvptr = data + w * h;
+//#define FFALIGN(x, a) (((x)+(a)-1)&~((a)-1))
+//
+//	int linesize = FFALIGN(w, align);
+//	//av_image_get_buffer_size(AV_PIX_FMT_YUV420P,w,h,32);
+//	//av_image_fill_arrays()
+//	memcpy(dsc, data, w * h);
+//
+//	ptr_u = dsc + w * h;
+//	ptr_v = dsc + w * h + linesize * (h / 2);
+//
+//	for (int y = 0; y < h / 2; y++)
+//	{
+//		for (int x = 0; x < w / 2; x++)
+//		{
+//			//pFrame->data[1][y * pFrame->linesize[1] + x] = pImagePacket->pBuf[y * iWidthNv12 + x * 2];
+//			//pFrame->data[2][y * pFrame->linesize[2] + x] = pImagePacket->pBuf[y * iWidthNv12 + x * 2 + 1];
+//
+//			ptr_u[y * w / 2 + x] = nvptr[y * w + x * 2];
+//			ptr_v[y * w / 2 + x] = nvptr[y * w + x * 2 + 1];
+//		}
+//	}
+//	return 0;
+//}
+
+int ffmpeg_AVFrame_NV12ToYUV420P(AVFrame *nv12frame, AVFrame *yuv420pframe)
+{
+	uint8_t *ptry, *ptru, *ptrv;
+	uint8_t *nvptr = nv12frame->data[1];
+
+	int width = nv12frame->width;
+	int height = nv12frame->height;
+	int dsch = yuv420pframe->height;
+	int dscw = yuv420pframe->width;
+
+	memcpy(yuv420pframe->data[0], nv12frame->data[0],
+			nv12frame->width * nv12frame->height);
+
+	ptru = yuv420pframe->data[1]; //u
+	ptrv = yuv420pframe->data[2]; //v
+
+	uint8_t *ptru_tmp, *ptrv_tmp;
+
+	for (int nvy = 0; nvy < dsch / 2 /*height / 2*/; nvy++)
+	{
+		ptru_tmp = ptru;
+		ptrv_tmp = ptrv;
+
+		for (int nvx = 0; nvx < dscw; nvx++)
+		{
+			if (nvx % 2 == 0)
+			{
+				*ptru++ = nvptr[nvy * width + nvx]; //u
+			}
+			else
+			{
+				*ptrv++ = nvptr[nvy * width + nvx]; //v
+			}
+		}
+
+		ptru = ptru_tmp;
+		ptrv = ptrv_tmp;
+
+		//
+		ptru += yuv420pframe->linesize[1];
+		ptrv += yuv420pframe->linesize[2];
+	}
+	return 0;
+}
+
+/**
+ AVFrame *j420pFrame=ffmpeg_av_frame_alloc(AV_PIX_FMT_YUVJ420P, w, h);
+ ffmpeg_NV12ToYUV420PFrame(data, w, h, j420pFrame);
+ av_frame_free(&j420pFrame);
+ */
+int ffmpeg_NV12ToYUV420PFrame(uint8_t *data, int w, int h, AVFrame *j420pFrame) {
+	AVFrame *frameNV12 = av_frame_alloc();
+	frameNV12->format = AV_PIX_FMT_NV12;
+	frameNV12->width = w;
+	frameNV12->height = h;
+
+	av_image_fill_arrays(frameNV12->data, frameNV12->linesize, data,
+			(enum AVPixelFormat) frameNV12->format, frameNV12->width,
+			frameNV12->height, 1);
+	ffmpeg_AVFrame_NV12ToYUV420P(frameNV12, j420pFrame);
+	av_frame_free(&frameNV12);
+	return 0;
+}
 
