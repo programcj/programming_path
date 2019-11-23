@@ -21,7 +21,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-#include "curl/curl.h"
+//#include "curl/curl.h"
 #include "digest.h"
 #include "client.h"
 #include "SOAP_Onvif.h"
@@ -91,6 +91,212 @@ static int http_auth_digest(const char* dsc_disget, char* resultstr, int reslen,
 	return 0;
 }
 
+#include <sys/poll.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <sys/fcntl.h>
+#include <unistd.h>
+
+static int _socket_writestr(int fd, const char *str) {
+	return write(fd, str, strlen(str));
+}
+static int http_post(const char *url, const char *authorization,
+		const char *poststr, char *arg_http_resp, int arg_resplen) {
+	char ipstr[20] = "";
+	int port = 80;
+	char *path = NULL;
+	char *ptr;
+	char *tmpp;
+	int isssl = 0;
+	int ret;
+
+	memset(arg_http_resp, 0, arg_resplen);
+	if (strncmp(url, "http://", 7) == 0) {
+		isssl = 0;
+		ptr = (char*) url + 7;
+	} else if (strncmp(url, "https://", 8) == 0) {
+		isssl = 1;
+		ptr = (char*) url + 8;
+	}
+	tmpp = ipstr;
+
+	while (*ptr && tmpp != ipstr + 20) {
+		if (*ptr != '.' && !isdigit(*ptr))
+			break;
+		*tmpp++ = *ptr++;
+	}
+	if (*ptr == ':') {
+		port = atoi(ptr + 1);
+		while (*ptr && *ptr != '/')
+			ptr++;
+	}
+
+	path = ptr;
+	if (!path || *path == 0)
+		path = "/";
+
+	printf("ip:%s,port:%d, path:%s\n", ipstr, port, path);
+
+	int fd;
+
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port); //addr.sin_addr.s_addr=
+	ret = inet_aton(ipstr, &addr.sin_addr);
+
+	char buffcache[1024];
+
+	fd = socket(AF_INET, SOCK_STREAM, 0);
+	ret = connect(fd, (struct sockaddr*) &addr, sizeof(addr));
+
+	if (ret) {
+		printf("connect err:%d,%s\n", errno, strerror(errno));
+		goto _hquit;
+	}
+
+	sprintf(buffcache, "POST %s HTTP/1.1\r\n", path);
+	_socket_writestr(fd, buffcache);
+
+	sprintf(buffcache, "HOST:%s\r\n", ipstr);
+	_socket_writestr(fd, buffcache);
+
+	sprintf(buffcache, "Accept: */*\r\n");
+	_socket_writestr(fd, buffcache);
+
+	sprintf(buffcache, "Content-Type: application/soap+xml; charset=utf-8\r\n");
+	_socket_writestr(fd, buffcache);
+
+	if (authorization && strlen(authorization) > 0) {
+		_socket_writestr(fd, authorization);
+		_socket_writestr(fd, "\r\n");
+	}
+
+	sprintf(buffcache, "Content-Length: %ld\r\n", strlen(poststr));
+	_socket_writestr(fd, buffcache);
+
+	_socket_writestr(fd, "\r\n");
+	_socket_writestr(fd, poststr);
+
+	ptr = arg_http_resp;
+	const char *ptr_end = arg_http_resp + arg_resplen;
+
+	struct pollfd pos;
+	pos.fd = fd;
+	pos.events = POLLIN | POLLHUP | POLLERR | POLLNVAL;
+
+	int content_length = -1;
+	int dehead = 0;
+
+	//_socket_nonblock(fd, 1); //非阻塞
+	int opt = fcntl(fd, F_GETFL, 0);
+	if (opt == -1) {
+		goto _hquit;
+	}
+	if (1)
+		opt |= O_NONBLOCK;
+	else
+		opt &= ~O_NONBLOCK;
+
+	if (fcntl(fd, F_SETFL, opt) == -1) {
+		goto _hquit;
+	}
+
+	while (1) {
+		ret = poll(&pos, 1, 2 * 1000);
+		if (ret <= 0) {
+			printf("timeout ret=%d\n", ret);
+			break;
+		}
+
+		if (pos.revents != POLLIN)
+			continue;
+
+		//read http head
+		if (0 == dehead) {
+			char v;
+			char *head = ptr;
+			while (ptr < ptr_end && 0 == dehead) {
+				ret = recv(fd, &v, sizeof(v), 0);
+				if (ret < 0) {
+					if (errno == EAGAIN || errno == EINTR) {
+						continue;
+					}
+					break;
+				}
+				*ptr = v;
+				if (*ptr == '\n') { //收到一行
+					if (ptr - 3 > arg_http_resp) {
+						if ((*(ptr - 2) == '\n' && *(ptr - 1) == '\r')
+								|| (*(ptr - 1) == '\n')) {
+							//http头完成
+							dehead = 1;
+						}
+					}
+					//printf(">>>:%s", head);
+					if (strncasecmp(head, "Content-Length:",
+							strlen("Content-Length:")) == 0) {
+						sscanf(head, "%*[^0-9]%d", &content_length);
+					}
+					head = ptr + 1;
+				}
+				ptr++;
+			}
+			//printf("----- http head -----\n%s\n---head end ---\n", arg_http_resp);
+			//printf("neec content_length:%d\n", content_length);
+			//printf("-----------------------------\n");
+			if (content_length == 0)
+				break;
+		}
+
+		{
+			ret = recv(fd, buffcache, sizeof(buffcache), 0);
+			if (ret <= 0) {
+				if (errno == EAGAIN || errno == EINTR) {
+					continue;
+				}
+				break;
+			}
+			if (ptr + ret < ptr_end) {
+				memcpy(ptr, buffcache, ret);
+				ptr += ret;
+				if (content_length >= 0) {
+					content_length -= ret;
+					if (content_length <= 0)
+						break;
+				}
+			}
+		}
+	}
+
+	shutdown(fd, SHUT_RDWR);
+	_hquit: close(fd);
+
+	long httpcode = 0;
+	long headersize = 0;
+	headersize = strlen(arg_http_resp);
+	if (headersize > 0) {
+		//curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpcode);
+		//HTTP/1.1 200 OK
+		//HTTP/1.1 401 Unauthorized
+		sscanf(arg_http_resp, "%*9s %ld", &httpcode);
+		ret = httpcode;
+	}
+
+	if (httpcode == 200) {
+		//int sumlen = strlen(arg_http_resp); 去掉http头
+		int cpoit = http_content_point(arg_http_resp);
+		if (cpoit < arg_resplen)
+			memcpy(arg_http_resp, arg_http_resp + cpoit, arg_resplen - cpoit);
+	}
+	//printf("%s\n", respstr);
+	//printf("httpcode:%ld\n", httpcode);
+	return ret;
+}
+
+#ifdef CONFIG_USE_CURL_HTTP_POST
+
 struct data_buff {
 	char *buff;
 	int size;
@@ -98,7 +304,7 @@ struct data_buff {
 };
 
 static size_t _http_curl_wheader(char* buffer, size_t size, //大小
-		size_t nitems, //哪一块
+		size_t nitems,//哪一块
 		struct data_buff *out) {
 	//strncat(out, buffer, size * nitems);
 	memcpy(out->buff + out->index, buffer, size * nitems);
@@ -107,7 +313,7 @@ static size_t _http_curl_wheader(char* buffer, size_t size, //大小
 }
 
 static size_t _http_curl_wcontent(char* buffer, size_t size, //大小
-		size_t nitems, //哪一块
+		size_t nitems,//哪一块
 		struct data_buff *out) {
 	int len = size * nitems;
 	if (len + out->index < out->size) {
@@ -131,7 +337,7 @@ static int http_post(const char *url, const char *authorization,
 	http_header = curl_slist_append(http_header,
 			"Content-Type: application/soap+xml; charset=utf-8");
 	if (authorization)
-		http_header = curl_slist_append(http_header, authorization);
+	http_header = curl_slist_append(http_header, authorization);
 
 	// 初始化CURL
 	curl = curl_easy_init();
@@ -141,56 +347,55 @@ static int http_post(const char *url, const char *authorization,
 	}
 
 	// 设置CURL参数
-	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
+	//curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
 
-	curl_easy_setopt(curl, CURLOPT_URL, url); //url地址
+	curl_easy_setopt(curl, CURLOPT_URL, url);//url地址
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, http_header);
 
-	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, poststr); //post参数
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, poststr);//post参数
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, strlen(poststr));
 
-	curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, _http_curl_wheader); //处理http头部
-	curl_easy_setopt(curl, CURLOPT_HEADERDATA, &buff); //http头回调数据
+	curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, _http_curl_wheader);//处理http头部
+	curl_easy_setopt(curl, CURLOPT_HEADERDATA, &buff);//http头回调数据
 
 	//curl_easy_setopt(curl, CURLOPT_HEADER, 1);  //将响应头信息和相应体一起传给write_data
 
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _http_curl_wcontent); //处理http内容
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buff); //这是write_data的第四个参数值
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _http_curl_wcontent);//处理http内容
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buff);//这是write_data的第四个参数值
 
 	curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, resplen - 1);
-	curl_easy_setopt(curl, CURLOPT_POST, 1); //设置问非0表示本次操作为post
+	curl_easy_setopt(curl, CURLOPT_POST, 1);//设置问非0表示本次操作为post
 	//curl_easy_setopt(curl, CURLOPT_VERBOSE, 1); //打印调试信息
 
 	//curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1); //设置为非0,响应头信息location
 	//curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "/tmp/curlpost.cookie");
 
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L); //接收数据时超时设置，如果10秒内数据未接收完，直接退出
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);//接收数据时超时设置，如果10秒内数据未接收完，直接退出
 	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10);
 	//curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0); //设为false 下面才能设置进度响应函数
 
 	res = curl_easy_perform(curl);
 
 	long httpcode = 0;
-	// 判断是否接收成功
-	if (res != CURLE_OK) { //CURLE_OK is 0
-		fprintf(stderr, "-->CURL err: %s,%d \n", url, res);
+	long headersize = 0;
+	curl_easy_getinfo(curl, CURLINFO_HEADER_SIZE, &headersize);
 
-		long headersize = 0;
-		res = curl_easy_getinfo(curl, CURLINFO_HEADER_SIZE, &headersize);
-		res = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpcode);
+	// 判断是否接收成功
+	if (res != CURLE_OK) { //CURLE_OK is 0 CURLE_OPERATION_TIMEDOUT
+		fprintf(stderr, "-->CURL err: %s,%d \n", url, res);
+		printf("[headersize:%ld] res=%d\n", headersize, res);
+	}
+	if (headersize > 0) {
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpcode);
 		res = httpcode;
-		printf("[headersize:%ld]res=%d\n", headersize, res);
 	}
 
-	res = curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpcode);
-	res = httpcode;
-
 	if (httpcode == 200) {
-		int sumlen = strlen(respstr);
+		//int sumlen = strlen(respstr);
 		int cpoit = http_content_point(respstr);
 		if (cpoit < resplen)
-			memcpy(respstr, respstr + cpoit, resplen - cpoit);
+		memcpy(respstr, respstr + cpoit, resplen - cpoit);
 	}
 
 	// 释放CURL相关分配内存
@@ -198,6 +403,7 @@ static int http_post(const char *url, const char *authorization,
 	curl_easy_cleanup(curl);
 	return res;
 }
+#endif
 
 /**
  * onvif的http请求, return 200成功
@@ -363,6 +569,9 @@ int Onvif_GetDeviceInformation(const char *url, const char *user,
 	xmlstr[0] = 0;
 	ret = onvif_http_digest_post(url, user, pass, XML_GetDeviceInformation,
 			xmlstr, sizeof(xmlstr));
+	info->httpRespStatus = ret;
+	if (ret != 200)
+		return ret;
 
 	node = xml_getNode(xmlstr, "Manufacturer>");
 	if (node) {
@@ -471,10 +680,10 @@ void xml_label(const char *xmlstr,
 	const char *lname_end;
 	const char *lname_s;
 
-	while (p < end) {
+	while (p && p < end) {
 		//xml 开始
 
-		if (*p == '<' && *(p + 1) != '/' && p + 1 < end) {
+		if (p + 1 < end && *p == '<' && *(p + 1) != '/') {
 			p++;
 
 			lend = strchr(p, '>');
@@ -507,8 +716,10 @@ void xml_label(const char *xmlstr,
 					callback(p, lend - p, txt_s, txt_e - txt_s, user);
 				}
 				//xml_label_out(p, lend - p, txt_s, txt_e - txt_s);
+				p = lend;
+			} else {
+				fprintf(stderr, "length not find '>' %s\n", p);
 			}
-			p = lend;
 			continue;
 		}
 		p++;
@@ -558,7 +769,11 @@ static void _xml_GetProfilesResponse(const char *xmllabel, int llen,
 		//printf("label:%s,attrib:%s\n", label, attrib);
 		if (strstr(attrib, "token=")) {
 			char token[100];
-			sscanf(attrib, "token=%*c%[^\"\']", token);
+			char *p = strstr(attrib, "token=");
+			if (p)
+				sscanf(p, "token=%*c%[^\"\']", token);
+			else
+				token[0] = 0;
 			if (context->index < 5) {
 				strcpy(context->profiles[context->index].token, token);
 				context->index++;
@@ -588,7 +803,9 @@ static void _xml_GetProfilesResponse(const char *xmllabel, int llen,
 
 int Onvif_MediaService_GetProfiles(const char *mediaUrl, const char *user,
 		const char *pass, struct OnvifDeviceProfiles profiles[5]) {
-	char xmlstr[10240];
+#define xml_size 27636
+	char *xmlstr = (char*) malloc(xml_size);
+
 	int ret = 0;
 	xmlstr[0] = 0;
 
@@ -597,8 +814,12 @@ int Onvif_MediaService_GetProfiles(const char *mediaUrl, const char *user,
 	context.index = 0;
 
 	ret = onvif_http_digest_post(mediaUrl, user, pass, XML_GetProfiles, xmlstr,
-			sizeof(xmlstr));
-	xml_label(xmlstr, _xml_GetProfilesResponse, &context);
+	xml_size - 1);
+
+	profiles[0].httpRespStatus = ret;
+	if (ret == 200)
+		xml_label(xmlstr, _xml_GetProfilesResponse, &context);
+	free(xmlstr);
 	return ret;
 }
 
@@ -685,14 +906,20 @@ void OnvifURI_Decode(const char *url, char *desc, int dlen) {
 }
 
 void Onvif_HttpTest() {
-	char *url = "http://192.168.0.150/onvif/device_service";
+	char *url = "http://192.168.0.188/onvif/device_service";
 	char *user = "admin";
-	char *pass = "admin";
+	char *pass = "123456";
 	int ret;
 
 	char mediaUrl[100];
 	struct OnvifDeviceInformation info;
 	memset(&info, 0, sizeof(info));
+
+	char xmlstr[] =
+			"<SOAP-ENV:Envelope xmlns:SOAP-ENV=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:SOAP-ENC=\"http://www.w3.org/2003/05/soap-encoding\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" xmlns:wsa=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" xmlns:wsdd=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" xmlns:wsa5=\"http://www.w3.org/2005/08/addressing\" xmlns:wsu=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd\" xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\" xmlns:tpa=\"http://www.onvif.org/ver10/pacs\" xmlns:xmime=\"http://tempuri.org/xmime.xsd\" xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" xmlns:wsrfbf=\"http://docs.oasis-open.org/wsrf/bf-2\" xmlns:tt=\"http://www.onvif.org/ver10/schema\" xmlns:wstop=\"http://docs.oasis-open.org/wsn/t-1\" xmlns:wsrfr=\"http://docs.oasis-open.org/wsrf/r-2\" xmlns:tac=\"http://www.onvif.org/ver10/accesscontrol/wsdl\" xmlns:tad=\"http://www.onvif.org/ver10/analyticsdevice/wsdl\" xmlns:tae=\"http://www.onvif.org/ver10/actionengine/wsdl\" xmlns:tana=\"http://www.onvif.org/ver20/analytics/wsdl/AnalyticsEngineBinding\" xmlns:tanr=\"http://www.onvif.org/ver20/analytics/wsdl/RuleEngineBinding\" xmlns:tan=\"http://www.onvif.org/ver20/analytics/wsdl\" xmlns:tar=\"http://www.onvif.org/ver10/accessrules/wsdl\" xmlns:tasa=\"http://www.onvif.org/ver10/advancedsecurity/wsdl/AdvancedSecurityServiceBinding\" xmlns:tasd=\"http://www.onvif.org/ver10/advancedsecurity/wsdl/Dot1XBinding\" xmlns:task=\"http://www.onvif.org/ver10/advancedsecurity/wsdl/KeystoreBinding\" xmlns:tast=\"http://www.onvif.org/ver10/advancedsecurity/wsdl/TLSServerBinding\" xmlns:tas=\"http://www.onvif.org/ver10/advancedsecurity/wsdl\" xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\" xmlns:tec=\"http://www.onvif.org/ver10/events/wsdl/CreatePullPointBinding\" xmlns:tee=\"http://www.onvif.org/ver10/events/wsdl/EventBinding\" xmlns:tenc=\"http://www.onvif.org/ver10/events/wsdl/NotificationConsumerBinding\" xmlns:tenp=\"http://www.onvif.org/ver10/events/wsdl/NotificationProducerBinding\" xmlns:tep=\"http://www.onvif.org/ver10/events/wsdl/PullPointBinding\" xmlns:tepa=\"http://www.onvif.org/ver10/events/wsdl/PausableSubscriptionManagerBinding\" xmlns:wsnt=\"http://docs.oasis-open.org/wsn/b-2\" xmlns:tepu=\"http://www.onvif.org/ver10/events/wsdl/PullPointSubscriptionBinding\" xmlns:tev=\"http://www.onvif.org/ver10/events/wsdl\" xmlns:tesm=\"http://www.onvif.org/ver10/events/wsdl/SubscriptionManagerBinding\" xmlns:timg=\"http://www.onvif.org/ver20/imaging/wsdl\" xmlns:tls=\"http://www.onvif.org/ver10/display/wsdl\" xmlns:tmd=\"http://www.onvif.org/ver10/deviceIO/wsdl\" xmlns:tndl=\"http://www.onvif.org/ver10/network/wsdl/DiscoveryLookupBinding\" xmlns:tdn=\"http://www.onvif.org/ver10/network/wsdl\" xmlns:tnrd=\"http://www.onvif.org/ver10/network/wsdl/RemoteDiscoveryBinding\" xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\" xmlns:trc=\"http://www.onvif.org/ver10/recording/wsdl\" xmlns:trp=\"http://www.onvif.org/ver10/replay/wsdl\" xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\" xmlns:trt2=\"http://www.onvif.org/ver20/media/wsdl\" xmlns:trv=\"http://www.onvif.org/ver10/receiver/wsdl\" xmlns:tse=\"http://www.onvif.org/ver10/search/wsdl\" xmlns:tss=\"http://www.onvif.org/ver10/schedule/wsdl\" xmlns:tth=\"http://www.onvif.org/ver10/thermal/wsdl\" xmlns:tns1=\"http://www.onvif.org/ver10/topics\" xmlns:ter=\"http://www.onvif.org/ver10/error\"><SOAP-ENV:Body><trt:GetProfilesResponse><trt:Profiles fixed=\"true\" token=\"profile_token_1\"><tt:Name>profile1</tt:Name><tt:VideoSourceConfiguration token=\"VideoSource_token_1\"><tt:Name>VideoSource_1</tt:Name><tt:UseCount>4</tt:UseCount><tt:SourceToken>VideoSource_token_1</tt:SourceToken><tt:Bounds height=\"1080\" width=\"1920\" y=\"0\" x=\"0\"></tt:Bounds></tt:VideoSourceConfiguration><tt:AudioSourceConfiguration token=\"AudioSource_token_1\"><tt:Name>AudioSource_1</tt:Name><tt:UseCount>3</tt:UseCount><tt:SourceToken>AudioSource_token_1</tt:SourceToken></tt:AudioSourceConfiguration><tt:VideoEncoderConfiguration token=\"VideoEncode_token_1\"><tt:Name>VideoEncode_1</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding><tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution><tt:Quality>5</tt:Quality><tt:RateControl><tt:FrameRateLimit>25</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>3072</tt:BitrateLimit></tt:RateControl><tt:H264><tt:GovLength>100</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>239.0.0.0</tt:IPv4Address></tt:Address><tt:Port>50554</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:VideoEncoderConfiguration><tt:AudioEncoderConfiguration token=\"AudioEncode_token_1\"><tt:Name>AudioEncode_1</tt:Name><tt:UseCount>3</tt:UseCount><tt:Encoding>G711</tt:Encoding><tt:Bitrate>128</tt:Bitrate><tt:SampleRate>8</tt:SampleRate><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>239.0.0.3</tt:IPv4Address></tt:Address><tt:Port>53554</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:AudioEncoderConfiguration><tt:VideoAnalyticsConfiguration token=\"VideoAnalytics0\"><tt:Name>MotionAnalytics_0</tt:Name><tt:UseCount>4</tt:UseCount><tt:AnalyticsEngineConfiguration><tt:AnalyticsModule Type=\"tt:CellMotionEngine\" Name=\"CellMotionModule\"><tt:Parameters><tt:SimpleItem Value=\"42\" Name=\"Sensitivity\"></tt:SimpleItem><tt:ElementItem Name=\"Layout\"><tt:CellLayout Columns=\"22\" Rows=\"18\"><tt:Transformation><tt:Translate x=\"-1.000000\" y=\"-1.000000\"/><tt:Scale x=\"0.001042\" y=\"0.001852\"/></tt:Transformation></tt:CellLayout></tt:ElementItem></tt:Parameters></tt:AnalyticsModule></tt:AnalyticsEngineConfiguration><tt:RuleEngineConfiguration><tt:Rule Type=\"tt:CellMotionDetector\" Name=\"MotionDetectorRule\"><tt:Parameters><tt:SimpleItem Value=\"1\" Name=\"MinCount\"></tt:SimpleItem><tt:SimpleItem Value=\"0\" Name=\"AlarmOnDelay\"></tt:SimpleItem><tt:SimpleItem Value=\"20000\" Name=\"AlarmOffDelay\"></tt:SimpleItem><tt:SimpleItem Value=\"0P8A8A==\" Name=\"ActiveCells\"></tt:SimpleItem></tt:Parameters></tt:Rule></tt:RuleEngineConfiguration></tt:VideoAnalyticsConfiguration><tt:PTZConfiguration token=\"PTZToken\"><tt:Name>PTZconfig</tt:Name><tt:UseCount>3</tt:UseCount><tt:NodeToken>PTZToken</tt:NodeToken><tt:DefaultAbsolutePantTiltPositionSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:DefaultAbsolutePantTiltPositionSpace><tt:DefaultAbsoluteZoomPositionSpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:DefaultAbsoluteZoomPositionSpace><tt:DefaultRelativePanTiltTranslationSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace</tt:DefaultRelativePanTiltTranslationSpace><tt:DefaultRelativeZoomTranslationSpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/TranslationGenericSpace</tt:DefaultRelativeZoomTranslationSpace><tt:DefaultContinuousPanTiltVelocitySpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:DefaultContinuousPanTiltVelocitySpace><tt:DefaultContinuousZoomVelocitySpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace</tt:DefaultContinuousZoomVelocitySpace><tt:DefaultPTZSpeed><tt:PanTilt space=\"http://www.onvif.org/ver10/tptz/PanTiltSpaces/GenericSpeedSpace\" y=\"0.100000001\" x=\"0.100000001\"></tt:PanTilt><tt:Zoom space=\"http://www.onvif.org/ver10/tptz/ZoomSpaces/ZoomGenericSpeedSpace\" x=\"1\"></tt:Zoom></tt:DefaultPTZSpeed><tt:DefaultPTZTimeout>PT10S</tt:DefaultPTZTimeout><tt:PanTiltLimits><tt:Range><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:Range></tt:PanTiltLimits><tt:ZoomLimits><tt:Range><tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange></tt:Range></tt:ZoomLimits></tt:PTZConfiguration></trt:Profiles><trt:Profiles fixed=\"true\" token=\"profile_token_2\"><tt:Name>profile2</tt:Name><tt:VideoSourceConfiguration token=\"VideoSource_token_1\"><tt:Name>VideoSource_1</tt:Name><tt:UseCount>4</tt:UseCount><tt:SourceToken>VideoSource_token_1</tt:SourceToken><tt:Bounds height=\"1080\" width=\"1920\" y=\"0\" x=\"0\"></tt:Bounds></tt:VideoSourceConfiguration><tt:AudioSourceConfiguration token=\"AudioSource_token_1\"><tt:Name>AudioSource_1</tt:Name><tt:UseCount>3</tt:UseCount><tt:SourceToken>AudioSource_token_1</tt:SourceToken></tt:AudioSourceConfiguration><tt:VideoEncoderConfiguration token=\"VideoEncode_token_2\"><tt:Name>VideoEncode_2</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding><tt:Resolution><tt:Width>704</tt:Width><tt:Height>576</tt:Height></tt:Resolution><tt:Quality>5</tt:Quality><tt:RateControl><tt:FrameRateLimit>25</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>768</tt:BitrateLimit></tt:RateControl><tt:H264><tt:GovLength>100</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>239.0.0.1</tt:IPv4Address></tt:Address><tt:Port>51554</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:VideoEncoderConfiguration><tt:AudioEncoderConfiguration token=\"AudioEncode_token_1\"><tt:Name>AudioEncode_1</tt:Name><tt:UseCount>3</tt:UseCount><tt:Encoding>G711</tt:Encoding><tt:Bitrate>128</tt:Bitrate><tt:SampleRate>8</tt:SampleRate><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>239.0.0.3</tt:IPv4Address></tt:Address><tt:Port>53554</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:AudioEncoderConfiguration><tt:VideoAnalyticsConfiguration token=\"VideoAnalytics0\"><tt:Name>MotionAnalytics_0</tt:Name><tt:UseCount>4</tt:UseCount><tt:AnalyticsEngineConfiguration><tt:AnalyticsModule Type=\"tt:CellMotionEngine\" Name=\"CellMotionModule\"><tt:Parameters><tt:SimpleItem Value=\"42\" Name=\"Sensitivity\"></tt:SimpleItem><tt:ElementItem Name=\"Layout\"><tt:CellLayout Columns=\"22\" Rows=\"18\"><tt:Transformation><tt:Translate x=\"-1.000000\" y=\"-1.000000\"/><tt:Scale x=\"0.002841\" y=\"0.003472\"/></tt:Transformation></tt:CellLayout></tt:ElementItem></tt:Parameters></tt:AnalyticsModule></tt:AnalyticsEngineConfiguration><tt:RuleEngineConfiguration><tt:Rule Type=\"tt:CellMotionDetector\" Name=\"MotionDetectorRule\"><tt:Parameters><tt:SimpleItem Value=\"1\" Name=\"MinCount\"></tt:SimpleItem><tt:SimpleItem Value=\"0\" Name=\"AlarmOnDelay\"></tt:SimpleItem><tt:SimpleItem Value=\"20000\" Name=\"AlarmOffDelay\"></tt:SimpleItem><tt:SimpleItem Value=\"0P8A8A==\" Name=\"ActiveCells\"></tt:SimpleItem></tt:Parameters></tt:Rule></tt:RuleEngineConfiguration></tt:VideoAnalyticsConfiguration><tt:PTZConfiguration token=\"PTZToken\"><tt:Name>PTZconfig</tt:Name><tt:UseCount>3</tt:UseCount><tt:NodeToken>PTZToken</tt:NodeToken><tt:DefaultAbsolutePantTiltPositionSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:DefaultAbsolutePantTiltPositionSpace><tt:DefaultAbsoluteZoomPositionSpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:DefaultAbsoluteZoomPositionSpace><tt:DefaultRelativePanTiltTranslationSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace</tt:DefaultRelativePanTiltTranslationSpace><tt:DefaultRelativeZoomTranslationSpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/TranslationGenericSpace</tt:DefaultRelativeZoomTranslationSpace><tt:DefaultContinuousPanTiltVelocitySpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:DefaultContinuousPanTiltVelocitySpace><tt:DefaultContinuousZoomVelocitySpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace</tt:DefaultContinuousZoomVelocitySpace><tt:DefaultPTZSpeed><tt:PanTilt space=\"http://www.onvif.org/ver10/tptz/PanTiltSpaces/GenericSpeedSpace\" y=\"0.100000001\" x=\"0.100000001\"></tt:PanTilt><tt:Zoom space=\"http://www.onvif.org/ver10/tptz/ZoomSpaces/ZoomGenericSpeedSpace\" x=\"1\"></tt:Zoom></tt:DefaultPTZSpeed><tt:DefaultPTZTimeout>PT10S</tt:DefaultPTZTimeout><tt:PanTiltLimits><tt:Range><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:Range></tt:PanTiltLimits><tt:ZoomLimits><tt:Range><tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange></tt:Range></tt:ZoomLimits></tt:PTZConfiguration></trt:Profiles><trt:Profiles fixed=\"true\" token=\"profile_token_3\"><tt:Name>profile3</tt:Name><tt:VideoSourceConfiguration token=\"VideoSource_token_1\"><tt:Name>VideoSource_1</tt:Name><tt:UseCount>4</tt:UseCount><tt:SourceToken>VideoSource_token_1</tt:SourceToken><tt:Bounds height=\"1080\" width=\"1920\" y=\"0\" x=\"0\"></tt:Bounds></tt:VideoSourceConfiguration><tt:AudioSourceConfiguration token=\"AudioSource_token_1\"><tt:Name>AudioSource_1</tt:Name><tt:UseCount>3</tt:UseCount><tt:SourceToken>AudioSource_token_1</tt:SourceToken></tt:AudioSourceConfiguration><tt:VideoEncoderConfiguration token=\"VideoEncode_token_3\"><tt:Name>VideoEncode_3</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding><tt:Resolution><tt:Width>352</tt:Width><tt:Height>288</tt:Height></tt:Resolution><tt:Quality>4</tt:Quality><tt:RateControl><tt:FrameRateLimit>25</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>512</tt:BitrateLimit></tt:RateControl><tt:H264><tt:GovLength>100</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>239.0.0.2</tt:IPv4Address></tt:Address><tt:Port>52554</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:VideoEncoderConfiguration><tt:AudioEncoderConfiguration token=\"AudioEncode_token_1\"><tt:Name>AudioEncode_1</tt:Name><tt:UseCount>3</tt:UseCount><tt:Encoding>G711</tt:Encoding><tt:Bitrate>128</tt:Bitrate><tt:SampleRate>8</tt:SampleRate><tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>239.0.0.3</tt:IPv4Address></tt:Address><tt:Port>53554</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT60S</tt:SessionTimeout></tt:AudioEncoderConfiguration><tt:VideoAnalyticsConfiguration token=\"VideoAnalytics0\"><tt:Name>MotionAnalytics_0</tt:Name><tt:UseCount>4</tt:UseCount><tt:AnalyticsEngineConfiguration><tt:AnalyticsModule Type=\"tt:CellMotionEngine\" Name=\"CellMotionModule\"><tt:Parameters><tt:SimpleItem Value=\"42\" Name=\"Sensitivity\"></tt:SimpleItem><tt:ElementItem Name=\"Layout\"><tt:CellLayout Columns=\"22\" Rows=\"18\"><tt:Transformation><tt:Translate x=\"-1.000000\" y=\"-1.000000\"/><tt:Scale x=\"0.005682\" y=\"0.006944\"/></tt:Transformation></tt:CellLayout></tt:ElementItem></tt:Parameters></tt:AnalyticsModule></tt:AnalyticsEngineConfiguration><tt:RuleEngineConfiguration><tt:Rule Type=\"tt:CellMotionDetector\" Name=\"MotionDetectorRule\"><tt:Parameters><tt:SimpleItem Value=\"1\" Name=\"MinCount\"></tt:SimpleItem><tt:SimpleItem Value=\"0\" Name=\"AlarmOnDelay\"></tt:SimpleItem><tt:SimpleItem Value=\"20000\" Name=\"AlarmOffDelay\"></tt:SimpleItem><tt:SimpleItem Value=\"0P8A8A==\" Name=\"ActiveCells\"></tt:SimpleItem></tt:Parameters></tt:Rule></tt:RuleEngineConfiguration></tt:VideoAnalyticsConfiguration><tt:PTZConfiguration token=\"PTZToken\"><tt:Name>PTZconfig</tt:Name><tt:UseCount>3</tt:UseCount><tt:NodeToken>PTZToken</tt:NodeToken><tt:DefaultAbsolutePantTiltPositionSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:DefaultAbsolutePantTiltPositionSpace><tt:DefaultAbsoluteZoomPositionSpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:DefaultAbsoluteZoomPositionSpace><tt:DefaultRelativePanTiltTranslationSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace</tt:DefaultRelativePanTiltTranslationSpace><tt:DefaultRelativeZoomTranslationSpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/TranslationGenericSpace</tt:DefaultRelativeZoomTranslationSpace><tt:DefaultContinuousPanTiltVelocitySpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:DefaultContinuousPanTiltVelocitySpace><tt:DefaultContinuousZoomVelocitySpace>http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace</tt:DefaultContinuousZoomVelocitySpace><tt:DefaultPTZSpeed><tt:PanTilt space=\"http://www.onvif.org/ver10/tptz/PanTiltSpaces/GenericSpeedSpace\" y=\"0.100000001\" x=\"0.100000001\"></tt:PanTilt><tt:Zoom space=\"http://www.onvif.org/ver10/tptz/ZoomSpaces/ZoomGenericSpeedSpace\" x=\"1\"></tt:Zoom></tt:DefaultPTZSpeed><tt:DefaultPTZTimeout>PT10S</tt:DefaultPTZTimeout><tt:PanTiltLimits><tt:Range><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:Range></tt:PanTiltLimits><tt:ZoomLimits><tt:Range><tt:URI>http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>0</tt:Min><tt:Max>1</tt:Max></tt:XRange></tt:Range></tt:ZoomLimits></tt:PTZConfiguration></trt:Profiles></trt:GetProfilesResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>";
+
+	xml_label(xmlstr, xml_label_out, NULL);
+	//exit(1);
 
 	ret = Onvif_GetDeviceInformation(url, user, pass, &info);
 	printf("Ma:%s, Mo:%s, F:%s,S:%s,HID:%s\n", info.Manufacturer, info.Model,
@@ -704,9 +931,11 @@ void Onvif_HttpTest() {
 
 	struct OnvifDeviceProfiles profiles[5];
 	memset(profiles, 0, sizeof(profiles));
+	printf("get profiles\n");
 	Onvif_MediaService_GetProfiles(mediaUrl, user, pass, profiles);
 	char uri[300];
 
+	printf("get URI\n");
 	for (int i = 0; i < 5; i++) {
 		if (strlen(profiles[i].token) == 0)
 			break;
