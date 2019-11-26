@@ -1,3 +1,5 @@
+-- wireshark lua 分析websocket协议内容为json数据
+--
 local cj=Proto("cj", "cj proto")
 
 local f_proto = ProtoField.uint8("cj.protocol", "Protocol", base.DEC, vs_protos)
@@ -26,22 +28,22 @@ function cj.dissector(buf, pktinfo, tree)
 
     if #websocketfield> 0 then
         local finfo=dataf[1]
-        local v=finfo.value
-        local tvbuf=ByteArray.tvb(v)
 
-        print(typeof(v), "value:" , v)
-
-        pktinfo.cols.protocol:set("CJ")
-        pktinfo.cols.info="this is cj proto"
-
-        local subtree = tree:add(cj, tvbuf)
-
-        local json=Dissector.get("json");
-
-      
-        json:call(tvbuf, pktinfo, tree)
+        if finfo ~=nil then
+            local v=finfo.value
+            local tvbuf=ByteArray.tvb(v)
+    
+            print(typeof(v), "value:" , v)
+    
+            pktinfo.cols.protocol:set("CJ")
+            pktinfo.cols.info="this is cj proto"
+    
+            local subtree = tree:add(cj, tvbuf)
+            local json=Dissector.get("json");
+             
+            json:call(tvbuf, pktinfo, tree)
+        end
     end
-
 end
 
 -- local disstcp=DissectorTable.get("tcp.port")
