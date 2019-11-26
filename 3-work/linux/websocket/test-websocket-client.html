@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Websocket</title>
+</head>
+
+<body>
+    <h1>Echo Test</h1>
+    <textarea type="text" id="sendTxt" style="width:80%;height:200px;"></textarea>
+
+    <button id="sendBtn">发送</button>
+    <div id="recv">....</div>
+    <textarea type="text" id="recvMsg" style="width:80%;height:200px;"></textarea>
+
+    <script>
+        // 官方提供的websocket server地址
+        var websocket = new WebSocket("ws://localhost:8080/ws", "WebSocket");
+        // Socket.onopen 事件 连接建立时触发
+        websocket.onopen = function () {
+            console.log('websocket open');
+            document.getElementById('recv').innerHTML = "Connected";
+            websocket.send(JSON.stringify({ aaa: "aaa" }));
+        }
+        // 连接关闭时触发
+        websocket.onclose = function () {
+            console.log('websocket close');
+            document.getElementById('recv').innerHTML = "close";
+        }
+        // 客户端接收服务端数据时触发 e是MessageEvent
+        websocket.onmessage = function (e) {
+            var data = e.data;
+            var text = "";
+            console.log(data);
+
+            if (typeof (data) == "object") {
+                var size = data.size;
+                text = document.getElementById("recvMsg").innerHTML;
+
+                var blob = new Blob(["Hello World!"], { type: "text/plain" });
+                websocket.send(blob);
+
+
+                var reader = new FileReader();
+                reader.addEventListener("loadend", function(){
+                    console.debug("reader.result:",reader.result);
+
+                    var t=String.fromCharCode.apply(null, new Uint8Array(reader.result));
+                    
+                    text+=t;
+                    console.log(t);
+                });
+                reader.readAsArrayBuffer(data);
+
+
+            } else {
+                text = document.getElementById("recvMsg").innerHTML + "\n" + data;
+            }
+            document.getElementById("recvMsg").innerHTML = text;
+        }
+
+        document.getElementById("sendBtn").onclick = function () {
+            var txt = document.getElementById("sendTxt").value;
+            websocket.send(txt);
+        }
+    </script>
+</body>
+
+</html>
