@@ -32,16 +32,6 @@
 #include <sys/time.h>
 #include <time.h>
 
-/*数据类型别名*/
-typedef unsigned char u8;
-typedef unsigned short u16;
-typedef unsigned int u32;
-
-static volatile int _flagRun = 0;
-static char _address[30];
-static void *_bindData = NULL;
-static void (*_funbk)(void *bindData, const char *msg) = NULL;
-
 /* 计算校验和的算法 */
 static unsigned short cal_chksum(unsigned short *addr, int len) {
 	int sum = 0;
@@ -96,9 +86,9 @@ static int ping_check(in_addr_t saddr, const uint8_t *pack, int len) {
 
 	iphdr = (struct iphdr*) pack;
 	//icmp = (struct icmp*) (pack + sizeof(iphdr));
-	icmp = (struct icmp*) (pack + (iphdr->ihl<< 2));
+	icmp = (struct icmp*) (pack + (iphdr->ihl << 2));
 
-	if(saddr==iphdr->saddr && icmp->icmp_type == ICMP_ECHOREPLY)
+	if (saddr == iphdr->saddr && icmp->icmp_type == ICMP_ECHOREPLY)
 		return 1;
 
 	//printf("src:%s ", inet_ntop(AF_INET, &iphdr->saddr, ips, sizeof(ips)));
@@ -107,42 +97,65 @@ static int ping_check(in_addr_t saddr, const uint8_t *pack, int len) {
 	return 0;
 }
 
-static void backmsg(const char *format, ...) {
-	char buff[300];
-	va_list ap;
-	va_start(ap, format);
-	vsprintf(buff, format, ap);
-	va_end(ap);
+enum PingStat {
+	PingStat_Start, //
+	PingStat_Exit, //
+	PingStat_Echo,	//
+	PingStat_Host, //
+	PingStat_UnknowHost,	//
+	PingStat_TimeOut,	//
+	PingStat_Error //
+};
 
-	_funbk(_bindData, buff);
+typedef void (*PingBackCall)(void *user, enum PingStat stat, const char *text);
+
+struct PingAsync {
+	char hostname[120];
+	PingBackCall callback;
+	void *user;
+	int reqcount;
+	int timeoutsec;
+};
+
+static void _PingAsyncCall(struct PingAsync *parg, enum PingStat stat,
+		const char *text) {
+	if (parg->callback) {
+		parg->callback(parg->user, stat, text);
+	}
 }
 
-static void ping(const char *address) {
-//ping
+static int ping(struct PingAsync *parg) {
+	//ping
 	struct hostent *hp;
 	struct sockaddr_in whereto; /* who to ping */
 	struct sockaddr_in fromaddr;
 	int icmp_sock;
+	int ret;
+	int icmp_echo_count = 0;
+
+	_PingAsyncCall(parg, PingStat_Start, "");
 
 	icmp_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
 	if (icmp_sock == -1) {
 		perror("socket create err..");
-		return;
+		ret = -1;
+		goto _retexit;
 	}
 
 	memset(&whereto, 0, sizeof(whereto));
 	whereto.sin_family = AF_INET;
-	if (inet_aton(address, &whereto.sin_addr) == 1) {
+	if (inet_aton(parg->hostname, &whereto.sin_addr) == 1) {
 
 	} else {
-		hp = gethostbyname2(address, AF_INET);
+		hp = gethostbyname2(parg->hostname, AF_INET);
 		if (hp) {
 			memcpy(&whereto.sin_addr, hp->h_addr, 4);
 		}
 		else
 		{
-			backmsg("not gethostbyname2 %s", address);
-			return;
+			_PingAsyncCall(parg,PingStat_UnknowHost, "");
+			ret=-1;
+			goto _retexit;
 		}
 	}
 
@@ -155,7 +168,9 @@ static void ping(const char *address) {
 	int packsize;
 	int i = 0;
 
-	backmsg("ping %s", inet_ntoa(whereto.sin_addr));
+	memset(sendpacket, 0, 30);
+	inet_ntop(AF_INET, &whereto.sin_addr, sendpacket, 30);
+	_PingAsyncCall(parg, PingStat_Host, sendpacket);
 
 	fcntl(icmp_sock, F_SETFL, O_NONBLOCK);
 
@@ -164,12 +179,9 @@ static void ping(const char *address) {
 		struct timeval timestart, timeend;
 		fd_set set;
 
-		int ret;
 		while (i < 5) {
 			memset(sendpacket, 0, sizeof(sendpacket));
 			packsize = ping_getpack(sendpacket, i++, 1);
-
-			backmsg("icmp-id:%d", i);
 			timeo.tv_sec = 3;
 			timeo.tv_usec = 0;
 
@@ -183,9 +195,9 @@ static void ping(const char *address) {
 
 			ret = select(icmp_sock + 1, &set, NULL, NULL, &timeo);
 			if (ret == -1) {
-				backmsg("icmp select error");
+				_PingAsyncCall(parg, PingStat_Error, "icmp select error");
 			} else if (ret == 0) {
-				backmsg("icmp timeout");
+				_PingAsyncCall(parg, PingStat_TimeOut, "");
 			} else {
 				if (FD_ISSET(icmp_sock, &set)) {
 					socklen_t len;
@@ -198,58 +210,183 @@ static void ping(const char *address) {
 							(struct sockaddr *) &fromaddr, &len);
 					gettimeofday(&timeend, NULL);
 
-					if (ping_check(whereto.sin_addr.s_addr,recvpacket, ret)) {
-						backmsg("live:%ldms",
-								(timeend.tv_sec * 1000 + timeend.tv_usec / 1000)
-										- (timestart.tv_sec * 1000
-												+ timestart.tv_usec / 1000));
-					} else {
-						backmsg("icmp err:ret=%d", ret);
+					if (ping_check(whereto.sin_addr.s_addr, recvpacket, ret)) {
+						float sumtm = timeend.tv_sec - timestart.tv_sec;
+
+						sumtm *= 1000;
+						sumtm += (timeend.tv_usec - timestart.tv_usec);
+
+						sprintf(sendpacket, "time=%.2fms", sumtm/1000);
+						_PingAsyncCall(parg, PingStat_Echo, sendpacket);
+						icmp_echo_count++;
 					}
+//					else {
+//						_PingAsyncCall(parg, PingStat_Error, "not the ip echo");
+//					}
 				}
 			}
-		}
+		} // end while
 	}
-	close(icmp_sock);
-}
 
-static void _loop() {
-	ping(_address);
+	ret = icmp_echo_count;
+
+	_retexit:
+
+	if (icmp_sock != -1)
+		close(icmp_sock);
+
+	sprintf(sendpacket, "recv=%d", icmp_echo_count);
+	_PingAsyncCall(parg, PingStat_Exit, sendpacket);
+	return ret;
 }
 
 static void *_Run(void *arg) {
 	pthread_detach(pthread_self());
 	prctl(PR_SET_NAME, "Ping");
-	backmsg("start");
-	_loop();
-	backmsg("end");
-	_flagRun = 0;
+
+	struct PingAsync *parg = (struct PingAsync*) arg;
+	int ret;
+	ret = ping(parg);
+	free(parg);
 	return 0;
 }
 
-int ToolPing(const char *ip, void *bindData,
-		void (*funbk)(void *bindData, const char *msg)) {
+int ToolPingAsync(const char *host, void *bindData, PingBackCall funbk) {
 	pthread_t pt;
-	if (_flagRun)
+	int ret;
+	struct PingAsync *arg = (struct PingAsync*) malloc(
+			sizeof(struct PingAsync));
+	if (!arg)
 		return -1;
 
-	_flagRun = 1;
-	_funbk = funbk;
-	_bindData = bindData;
-	memset(_address, 0, sizeof(_address));
-	strncpy(_address, ip, sizeof(_address) - 1);
-	pthread_create(&pt, NULL, _Run, NULL);
-	return 0;
+	arg->callback = funbk;
+	arg->user = bindData;
+	strncpy(arg->hostname, host, sizeof(arg->hostname));
+	arg->reqcount = 5;
+	arg->timeoutsec = 3;
+	ret = pthread_create(&pt, NULL, _Run, arg);
+	if (ret) {
+		free(arg);
+	}
+	return ret;
 }
 
-
-void myprint(void *ctx, const char *msg) {
-	printf("%s\n", msg);
+static void _pingBackCall(void *user, enum PingStat stat, const char *text) {
+	printf("%d %s\n", stat, text);
 }
 
-int main(int argc, char **argv) {
-	_bindData = myprint;
-	ping("www.baidu.com");
-	return 0;
+//-1 错误
+//0 不存在或超时
+//>1 respcount
+int ToolPingSync(const char *host, int reqcount, int timeoutsec) {
+	//ping
+	struct PingAsync arg;
+	int ret;
+	memset(&arg, 0, sizeof(arg));
+
+	strncpy(arg.hostname, host, sizeof(arg.hostname));
+	arg.callback = _pingBackCall;
+	arg.user = NULL;
+	arg.reqcount = reqcount;
+	arg.timeoutsec = timeoutsec;
+	ret= ping(&arg);
+	return ret;
 }
+
+//	struct hostent *hp;
+//	struct sockaddr_in whereto; /* 目标地址 */
+//	struct sockaddr_in fromaddr; /*接收到数据的地址*/
+//	int icmp_sock;
+//	int icmp_echo_count = 0;
+//
+//	icmp_sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+//	if (icmp_sock == -1) {
+//		perror("socket create err..");
+//		return -1;
+//	}
+//
+//	memset(&whereto, 0, sizeof(whereto));
+//	whereto.sin_family = AF_INET;
+//	if (inet_aton(host, &whereto.sin_addr) == 1) {
+//
+//	} else {
+//		hp = gethostbyname2(host, AF_INET);
+//		if (hp) {
+//			memcpy(&whereto.sin_addr, hp->h_addr, 4);
+//		}
+//		else
+//		{
+//			perror("not get host ip");
+//			close(icmp_sock);
+//			return -1;
+//		}
+//	}
+//
+//	//接收buf
+//	int size = 10 * 1024;
+//	setsockopt(icmp_sock, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+//
+//	char sendpacket[10 * 1024];
+//	uint8_t recvpacket[10 * 1024];
+//
+//	int packsize;
+//	int i = 0;
+//
+//	printf("PING %s start\n", inet_ntoa(whereto.sin_addr));
+//
+//	//非阻塞
+//	fcntl(icmp_sock, F_SETFL, O_NONBLOCK);
+//
+//	{
+//		struct timeval timeo;
+//		struct timeval timestart, timeend;
+//		fd_set set;
+//
+//		int ret;
+//		while (i < reqcount) {
+//			memset(sendpacket, 0, sizeof(sendpacket));
+//			packsize = ping_getpack(sendpacket, i++, 1);
+//			printf("index:%d", i);
+//
+//			timeo.tv_sec = timeoutsec;
+//			timeo.tv_usec = 0;
+//
+//			gettimeofday(&timestart, NULL);
+//			sendto(icmp_sock, sendpacket, packsize, 0,
+//					(struct sockaddr *) &whereto, sizeof(whereto));
+//
+//			FD_ZERO(&set);
+//			FD_SET(icmp_sock, &set);
+//
+//			ret = select(icmp_sock + 1, &set, NULL, NULL, &timeo);
+//			if (ret == -1) {
+//				printf(" icmp select error");
+//			} else if (ret == 0) {
+//				printf(" icmp timeout\n");
+//			} else {
+//				if (FD_ISSET(icmp_sock, &set)) {
+//					socklen_t len;
+//					int ret = 0;
+//					len = sizeof(fromaddr);
+//
+//					memset(recvpacket, 0, sizeof(recvpacket));
+//
+//					ret = recvfrom(icmp_sock, recvpacket, sizeof recvpacket, 0,
+//							(struct sockaddr *) &fromaddr, &len);
+//					gettimeofday(&timeend, NULL);
+//
+//					if (ping_check(whereto.sin_addr.s_addr, recvpacket, ret)) {
+//						icmp_echo_count++;
+//						printf(" %s live:%ldms\n", inet_ntoa(whereto.sin_addr),
+//								(timeend.tv_sec * 1000 + timeend.tv_usec / 1000)
+//										- (timestart.tv_sec * 1000
+//												+ timestart.tv_usec / 1000));
+//					} else {
+//						printf("icmp err:ret=%d", ret);
+//					}
+//				}
+//			}
+//		}
+//	}
+//	close(icmp_sock);
 
