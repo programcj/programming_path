@@ -47,12 +47,35 @@ function cj.dissector(buf, pktinfo, tree)
 end
 
 -- local disstcp=DissectorTable.get("tcp.port")
-
 -- disstcp:add(1234, cj)
 
--- for k,v in pairs(DissectorTable.list()) do
--- 	print(">>" .. v)
--- end
+--[[
+--遍历所有解析器
+for k,v in pairs(DissectorTable.list()) do
+	print(">>" .. v)
+end
+
+--子解码器获取
+local dis=DissectorTable.get("media_type")
+print(typeof(dis))
+
+local dis=dis:get_dissector("image/jpg")
+print(typeof(dis))
+DissectorTable.get("sctp.ppi"):get_dissector(3), -- m3ua
+
+    c中 register_dissector 的解码器才能通过Dissector获取
+        dissector_add_string("name","..", handle); 这样的只能通过 DissectorTable.get("name"):get_dissector(..)
+        register_dissector_table("name") 这里注册到 DissectorTable
+
+        dissector_try_uint_new(subdissector_table, low_port, ...) tcp端口协议子解码
+
+        --packet-http.c 解析media_type时，获取dissector       
+        dissector_get_string_handle(
+                    media_type_subdissector_table
+                    
+local list=Field.list() --能获取所有的
+
+]]
 
 register_postdissector(cj)
 
