@@ -167,9 +167,8 @@ end
 	第三个参数是 TreeItem 类型，表示上一级解析树
 --]]
 function foo_proto.dissector(buf, pinfo, treeitem)
-	
 	local offset = 0
-  local buf_len = buf:len()
+	local buf_len = buf:len()
   
 	local seq=buf(2,2):uint()
 	local payload=buf(1, 1):bitfield(1,7)
@@ -189,16 +188,16 @@ function foo_proto.dissector(buf, pinfo, treeitem)
 	foo_tree:add("RTP all len:" .. buf_len .. ", data:" .. data_len)
 	
 	foo_tree:add(rptps_version,buf(0, 1):bitfield(0,2))
-  foo_tree:add(rptps_padding,buf(0, 1):bitfield(3,1))
-  foo_tree:add(rptps_extension,buf(0, 1):bitfield(5,1))
-  foo_tree:add(rptps_csrc_len,buf(0, 1):bitfield(6,1))
-  
-  foo_tree:add(rptps_marker,buf(1, 1):bitfield(0,1))
-  foo_tree:add(rptps_payload, buf(1, 1):bitfield(1,7))
-  
-  foo_tree:add(rptps_seq, buf(2,2))
-  foo_tree:add(rptps_timestamp, buf(5,4))
-  foo_tree:add(rptps_ssrc, buf(8,4))
+	foo_tree:add(rptps_padding,buf(0, 1):bitfield(3,1))
+	foo_tree:add(rptps_extension,buf(0, 1):bitfield(5,1))
+	foo_tree:add(rptps_csrc_len,buf(0, 1):bitfield(6,1))
+
+	foo_tree:add(rptps_marker,buf(1, 1):bitfield(0,1))
+	foo_tree:add(rptps_payload, buf(1, 1):bitfield(1,7))
+
+	foo_tree:add(rptps_seq, buf(2,2))
+	foo_tree:add(rptps_timestamp, buf(5,4))
+	foo_tree:add(rptps_ssrc, buf(8,4))
   
 	foo_tree:add(rptps_data, buf(12, buf_len-12))
 	
@@ -233,10 +232,11 @@ local rtp_ps_port = Proto("call-rtp-ps","call rtp ps")
 
 function rtp_ps_port.dissector(buffer, pinfo, tree)
  	local fields = { all_field_infos() }
-        local websocket_flag = false
+		local websocket_flag = false
+		
         for i, finfo in ipairs(fields) do
         		
-        		-- print("name:" .. finfo.name)
+        	-- print("name:" .. finfo.name)
         		
             if (finfo.name == "rtp") then
                 websocket_flag = true

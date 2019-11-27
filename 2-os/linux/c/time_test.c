@@ -23,6 +23,10 @@ void time_test_0() {
 			t_tm.tm_sec);
 
 	printf("-end-start-%s\n", __FUNCTION__);
+	
+	char buf[30];
+	strftime(buf,sizeof(buf),"%F %T", &t_tm);
+	printf("time:%s\n", buf);
 }
 
 void time_test_1() {
