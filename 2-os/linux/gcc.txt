@@ -1,0 +1,1 @@
+$(CC) -shared -Wl,-soname,$(LIB_NAME).so.1.0 -Wl,-Bsymbolic $(OBJ) $(FFMPEG_STATS) -o $(LIB_NAME).so.1.0
