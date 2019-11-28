@@ -1,5 +1,4 @@
 {
-    "C_Cpp.clang_format_fallbackStyle": "WebKit",
     "files.associations": {
         "unistd.h": "c",
         "fcntl.h": "c",
@@ -8,6 +7,16 @@
         "prctl.h": "c",
         "stab.h": "c",
         "types.h": "c",
-        "stat.h": "c"
+        "stat.h": "c",
+        "route.h": "c",
+        "inet.h": "c",
+        "if.h": "c",
+        "ip_icmp.h": "c",
+        "in.h": "c",
+        "ip.h": "c",
+        "socket.h": "c",
+        "netdb.h": "c",
+        "packet.h": "c",
+        "if_packet.h": "c"
     }
 }

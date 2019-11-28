@@ -46,6 +46,8 @@ function cj.dissector(buf, pktinfo, tree)
     end
 end
 
+register_postdissector(cj)
+
 -- local disstcp=DissectorTable.get("tcp.port")
 -- disstcp:add(1234, cj)
 
@@ -73,53 +75,6 @@ DissectorTable.get("sctp.ppi"):get_dissector(3), -- m3ua
         dissector_get_string_handle(
                     media_type_subdissector_table
                     
-local list=Field.list() --能获取所有的
+local list=Field.list() --能获取所有的，很多上万个
 
 ]]
-
-register_postdissector(cj)
-
-
-
-do
-    -- calling tostring() on random FieldInfo's can cause an error, so this func handles it
-    local function getstring(finfo)
-        local ok, val = pcall(tostring, finfo)
-        if not ok then val = "(unknown)" end
-        return val
-    end
-    
-    -- Create a new dissector
-    MQTToverWebsocket = Proto("MQTToverWebsocket", "MQTT over Websocket")
-    mqtt_dissector = Dissector.get("mqtt")
-    -- The dissector function
-    function MQTToverWebsocket.dissector(buffer, pinfo, tree)
-        local fields = { all_field_infos() }
-        local websocket_flag = false
-        for i, finfo in ipairs(fields) do
-            if (finfo.name == "websocket") then
-                websocket_flag = true
-            end
-            if (websocket_flag == true and finfo.name == "data") then
-                local str1 = getstring(finfo)
-                local str2 = string.gsub(str1, ":", "")
-                local bufFrame = ByteArray.tvb(ByteArray.new(str2))
-                mqtt_dissector = Dissector.get("mqtt")
-                --mqtt_dissector:call(finfo.source, pinfo, tree) #9 BUG
-                mqtt_dissector:call(bufFrame, pinfo, tree)
-                --mqtt_dissector:call(finfo.value, pinfo, tree)
-                websocket_flag = false
-                pinfo.cols.protocol = "MQTT over Websocket"
-            end
-    end
-        
-        --ws_dissector_table = DissectorTable.get("ws.port")
-        --ws_dissector_table:add("443",mqtt_dissector)
-    end
-    -- Register the dissector
-    --ws_dissector_table = DissectorTable.get("ws.port")
-    --ws_dissector_table:remove(443, mqtt_dissector)
-    --ws_dissector_table:add(443, MQTTPROTO)
-    --ws_dissector_table:add_for_decode_as(mqtt_dissector)
-    --register_postdissector(MQTToverWebsocket)
-end

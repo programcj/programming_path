@@ -5,19 +5,21 @@
       "label": "clear exe file",
       "command": "rm",
       "args": [
-        "${fileDirname}/${fileBasenameNoExtension}.exe"     
+        "${fileDirname}/${fileBasenameNoExtension}.exe"
       ]
     },
     {
       "type": "shell",
-      "label": "build instance file",
+      "label": "gcc build instance file",
       "command": "/usr/bin/gcc",
       "args": [
         "-g",
         "${file}",
         "-o",
-        "${fileDirname}/${fileBasenameNoExtension}.exe"
-      ]
+        "${fileDirname}/${fileBasenameNoExtension}.exe",
+        "-lpthread"
+      ],
+      "group": "build"
     },
     {
       "type": "shell",
@@ -49,7 +51,26 @@
       },
       "problemMatcher": [
         "$gcc"
-      ]
+      ],
+      "group": "build"
+    },
+    {
+      "type": "shell",
+      "label": "gcc-5 build active file",
+      "command": "/usr/bin/gcc-5",
+      "args": [
+        "-g",
+        "${file}",
+        "-o",
+        "${fileDirname}/${fileBasenameNoExtension}"
+      ],
+      "options": {
+        "cwd": "/usr/bin"
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "build"
     }
   ],
   "version": "2.0.0"
