@@ -31,6 +31,8 @@
 #include <pthread.h>
 #include <signal.h>
 
+#define strncmpex(s1, s2) strncmp(s1, s2, strlen(s2))
+
 /* 功  能：将str字符串中的oldstr字符串替换为newstr字符串
  * 参  数：str：操作目标 oldstr：被替换者 newstr：替换者
  * 返回值：返回替换之后的字符串
@@ -56,6 +58,25 @@ char *strrpc(char *str, char *oldstr, char *newstr)
 
 	strcpy(str, bstr);
 	return str;
+}
+
+int str_replace_(char *str, const char *strold, const char *strnew)
+{
+	char *ptr = str;
+	int stroldlen = strlen(strold);
+	if (stroldlen != strlen(strnew))
+		return -1;
+
+	while (*ptr)
+	{
+		if (strncmp(ptr, strold, stroldlen) == 0)
+		{
+			memcpy(ptr, strnew, stroldlen);
+			ptr += stroldlen;
+			continue;
+		}
+		ptr++;
+	}
 }
 
 char *str_replace(const char *src, const char *strold, const char *strnew, char *strto, int tolen, int *pnewlen)
@@ -244,8 +265,9 @@ _reterr:
 struct addrinfo
 {
 	char ipstr[20];
-	int port;
 	int fd;
+	int port;
+	int port_rtsp;
 };
 
 //转发服务
@@ -267,7 +289,14 @@ enum protocoltype
 struct proto_http_info
 {
 	int isonvif_head;
+	int is_cgi_bin_main_cgi; ///cgi-bin/main-cgi
+	//json={"cmd":50,"stIPAddress":"192.168.0.20","u8RecvSendFlag":2,
+	//"u32TransportProtocal":1,"u32StreamIndex":2,
+	//"stResourceCode":"1100070001000007","u16Port":50980,
+	//"szUserName":"admin","u32UserLoginHandle":1168075761}
+	int is_nvr_u32TransportProtocal; //
 	int iskeep_alive;
+	int httpcode;
 	int contentLength;
 
 	//int contentEncoding;
@@ -292,6 +321,7 @@ struct sockstream
 	char remoteip[20];
 	int remote_port;
 
+	char description[50];
 	enum protocoltype protocol; //0=unknow, 1=http
 	struct proto_http_info info_http_head;
 
@@ -300,6 +330,7 @@ struct sockstream
 	int isfirst;  //首次接收情况
 };
 
+//替换此数据流
 struct repeater_stream
 {
 	struct repeater_stream *next;
@@ -320,10 +351,11 @@ void repeater_stream_unreg(struct repeater_stream *stream)
 
 int sockstream_debug_print(struct sockstream *stream)
 {
-	if (stream->type == 0)
-		printf("in %d (%s:%d-%s:%d) \n", stream->fd, stream->remoteip, stream->remote_port, stream->localip, stream->local_port);
-	else
-		printf("out %d (%s:%d-%s:%d) \n", stream->fd, stream->localip, stream->local_port, stream->remoteip, stream->remote_port);
+	printf("%s\n", stream->description);
+	// if (stream->type == 0)
+	// 	printf("in %d (%s:%d-%s:%d) \n", stream->fd, stream->remoteip, stream->remote_port, stream->localip, stream->local_port);
+	// else
+	// 	printf("out %d (%s:%d-%s:%d) \n", stream->fd, stream->localip, stream->local_port, stream->remoteip, stream->remote_port);
 	return 0;
 }
 
@@ -466,6 +498,7 @@ int socket_send(int fd, void *data, int size)
 			if (errno == EAGAIN || errno == EINTR)
 			{
 				//printf("eagin :%d\n", fd);
+				usleep(1000);
 				continue;
 			}
 			slen = -1;
@@ -527,7 +560,40 @@ struct buffdata
 	int size;
 };
 
-int _loop_http_head_request_in_out(struct sockstream *in, struct sockstream *out, struct buffdata *buffcache)
+int _loop_http_head_read(struct sockstream *in, struct buffdata *buffcache)
+{
+	int httpheadlen;
+	int ret;
+	httpheadlen = http_heard_end(buffcache->data, buffcache->index);
+	while (httpheadlen == -1)
+	{
+		ret = sockstream_recv(in, buffcache->data + buffcache->index, buffcache->size - buffcache->index); //预留100字节做备份
+
+		if (ret <= 0)
+		{
+			if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) //需要重新接收
+			{
+				usleep(1000);
+				continue;
+			}
+
+			log_d("recv err, ret=%d, %d [%s:%d]-[%s:%d] %d:%s\n", ret,
+				  in->fd,
+				  in->localip, in->local_port,
+				  in->remoteip, in->remote_port,
+				  errno, strerror(errno));
+			return -1;
+		}
+		buffcache->index += ret;
+		httpheadlen = http_heard_end(buffcache->data, buffcache->index);
+	}
+	return 0;
+}
+
+int _loop_http_head_request_in_out(struct repeater_stream *repstream,
+								   struct sockstream *in,
+								   struct sockstream *out,
+								   struct buffdata *buffcache)
 {
 	int httpheadlen;
 	char cacheline[1024];
@@ -535,32 +601,11 @@ int _loop_http_head_request_in_out(struct sockstream *in, struct sockstream *out
 	int rlen = 0;
 
 	httpheadlen = http_heard_end(buffcache->data, buffcache->index);
-	while (httpheadlen == -1)
-	{
-		rlen = sockstream_recv(in, buffcache->data + buffcache->index, buffcache->size - buffcache->index); //预留100字节做备份
-
-		if (rlen <= 0)
-		{
-			if (rlen < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) //需要重新接收
-			{
-				usleep(1000);
-				continue;
-			}
-
-			log_d("recv err, rlen=%d, %d [%s:%d]-[%s:%d] %d:%s\n", rlen,
-				  in->fd,
-				  in->localip, in->local_port,
-				  in->remoteip, in->remote_port,
-				  errno, strerror(errno));
-			return -1;
-		}
-		buffcache->index += rlen;
-		httpheadlen = http_heard_end(buffcache->data, buffcache->index);
-	}
-
 	memset(&in->info_http_head, 0, sizeof(in->info_http_head));
 
-	if (httpheadlen > 0)
+	if (httpheadlen <= 0)
+		return 0;
+
 	{
 		char *ptindex, *ptend;
 		const char *end = buffcache->data + httpheadlen;
@@ -586,25 +631,17 @@ int _loop_http_head_request_in_out(struct sockstream *in, struct sockstream *out
 			if (heard_index == 0)
 			{
 				if (strstr(cacheline, "/onvif/"))
-				{
 					in->info_http_head.isonvif_head = 1;
-				}
-				else
-				{
-					in->info_http_head.isonvif_head = 0;
-				}
-			}
 
-			if (strncasecmp(cacheline, "Host:", 5) == 0)
+				if (strstr(cacheline, "/cgi-bin/main-cgi "))
+					in->info_http_head.is_cgi_bin_main_cgi = 1;
+			}
+			if (0 == strncasecmp(cacheline, "Content-Length:", strlen("Content-Length:")))
 			{
-				snprintf(cacheline, sizeof(cacheline), "Host: %s:%d\r\n", out->remoteip, out->remote_port);
-				linelen = strlen(cacheline);
-				printf(">change>%s", cacheline);
+				in->info_http_head.contentLength = atoi(cacheline + strlen("Content-Length:"));
 			}
-			else
-			{ //Referer: http://9999999999:8082/mp4/images/css/
-				//if (strncasecmp(cacheline, "Referer:", strlen("Referer:")) == 0)
 
+			{ //IP替换
 				char buff1[20];
 				char buff2[20];
 				char *tmpstr;
@@ -628,7 +665,7 @@ int _loop_http_head_request_in_out(struct sockstream *in, struct sockstream *out
 				}
 			}
 
-			ret = sockstream_send(out, cacheline, linelen);
+			ret = sockstream_send(out, cacheline, strlen(cacheline));
 
 			if (ptindex[0] == '\n' || (ptindex[0] == '\r' && ptindex[1] == '\n'))
 			{
@@ -641,89 +678,386 @@ int _loop_http_head_request_in_out(struct sockstream *in, struct sockstream *out
 		buffcache->index -= httpheadlen;
 		memcpy(buffcache->data, buffcache->data + httpheadlen, buffcache->index);
 		printf("-------other:%d----\n", buffcache->index);
+
+		if (in->info_http_head.is_cgi_bin_main_cgi && in->info_http_head.contentLength > 0)
+		{
+			if (in->info_http_head.contentLength < buffcache->size - 100)
+			{
+				int need_length = in->info_http_head.contentLength - buffcache->index;
+				int rlen = 0;
+				while (need_length > 0)
+				{
+					ret = sockstream_recv(in, buffcache->data + buffcache->index, need_length);
+					if (ret <= 0)
+					{
+						if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) //需要重新接收
+						{
+							usleep(1000);
+							continue;
+						}
+
+						log_d("recv err, ret=%d, %d [%s:%d]-[%s:%d] %d:%s\n", ret,
+							  in->fd,
+							  in->localip, in->local_port,
+							  in->remoteip, in->remote_port,
+							  errno, strerror(errno));
+						rlen = -1;
+						break;
+					}
+					buffcache->index += ret;
+					rlen += ret;
+					need_length -= ret;
+				}
+				if (rlen == -1)
+					return -1;
+
+				buffcache->data[buffcache->index] = 0;
+				log_d("is_cgi_bin_main_cgi>%s\n", buffcache->data);
+
+				//分析数据中
+				if (strncmpex(buffcache->data, "json={") == 0)
+				{
+					if (strstr(buffcache->data, "\"cmd\"=50"))
+					{
+#define JSON_V "\"u8RecvSendFlag\":2,\"u32TransportProtocal\":1,\"u32StreamIndex\":2"
+						if (strstr(buffcache->data, JSON_V))
+						{
+							log_d("is_nvr_u32TransportProtocal\n");
+							in->info_http_head.is_nvr_u32TransportProtocal = 1;
+						}
+					}
+				}
+			}
+		}
 	}
 	return 0;
 }
 
-int _loop_http_head_response_in_out(struct sockstream *in, struct sockstream *out, struct buffdata *buffcache)
+int string_getline(const char *hbuf, char *linestr, int linesize)
 {
-	int httpheadlen;
-	char cacheline[1024];
-	int linelen;
-	int rlen = 0;
+	const char *ptend = strchr(hbuf, '\n');
+	int linelen = 0;
+	if (!ptend)
+		return -1;
+	ptend++;
+	linelen = ptend - hbuf;
+	memcpy(linestr, hbuf, linelen);
+	linestr[linelen] = 0;
+	return linelen;
+}
 
-	httpheadlen = http_heard_end(buffcache->data, buffcache->index);
-	while (httpheadlen == -1)
+int _loop_http_response_nvr(struct repeater_stream *repstream,
+							struct sockstream *in,
+							struct sockstream *out,
+							struct buffdata *buffcache)
+{
+	int ret = 0;
+	char *http_heard = NULL;
+	char *ptr, *ptr_end;
+
+	int httpheadlen = http_heard_end(buffcache->data, buffcache->index);
+	if (httpheadlen == -1)
 	{
-		rlen = sockstream_recv(in, buffcache->data + buffcache->index, buffcache->size - buffcache->index); //预留100字节做备份
+		printf("not read http head \n");
+		return -1;
+	}
+	log_d("nvr handle\n");
+	http_heard = strndup(buffcache->data, httpheadlen);
+	if (!http_heard)
+		return -1;
 
-		if (rlen <= 0)
+	buffcache->index -= httpheadlen;
+	memcpy(buffcache->data, buffcache->data + httpheadlen, buffcache->index);
+	int rlencount = 0;
+	while (rlencount < 3)
+	{
+		ret = sockstream_recv(in, buffcache->data + buffcache->index, buffcache->size - buffcache->index - 500);
+		if (ret <= 0)
 		{
-			if (rlen < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) //需要重新接收
+			if (ret < 0 && (errno == EAGAIN || errno == EINTR))
 			{
-				usleep(1000);
+				usleep(1000); //1ms
 				continue;
 			}
-
-			log_d("recv err, rlen=%d, %d [%s:%d]-[%s:%d] %d:%s\n", rlen,
-				  in->fd,
-				  in->localip, in->local_port,
-				  in->remoteip, in->remote_port,
-				  errno, strerror(errno));
-			return -1;
+			ret = -1;
+			break;
 		}
-		buffcache->index += rlen;
-		httpheadlen = http_heard_end(buffcache->data, buffcache->index);
+		rlencount++;
+		buffcache->index += ret;
+		ret = 0;
+	}
+	buffcache->data[buffcache->index] = 0;
+
+	// {
+	//  "u32Task_No": 241888135,
+	//  "u8RecvSendFlag": 1,
+	//  "u16Port": 80,
+	//  "stIPAddress": "192.168.0.198",
+	//  "szSessionID": "ldq10054",
+	//  "u16PayloadCount": 1,
+	//  "astPayloadTypeIE": [{
+	//    "u16Type": 2,
+	//    "u16PtVal": 96
+	//   }],
+	//  "code": 0,
+	//  "success": true
+	// }
+
+	if (strstr(buffcache->data, in->remoteip))
+	{
+		char *tmpstr = str_replace_new(buffcache->data, in->remoteip, out->localip);
+		strcpy(buffcache->data, tmpstr);
+		buffcache->index = strlen(tmpstr);
+		free(tmpstr);
+		ret = 0;
 	}
 
-	memset(&in->info_http_head, 0, sizeof(in->info_http_head));
+	//需要转发
+	ret = socket_send(out->fd, http_heard, strlen(http_heard));
+	if (ret != -1)
+		ret = 0;
+	//socket_send(out->fd, buffcache->data, buffcache->index);
+	free(http_heard);
+	return ret;
+}
 
-	if (httpheadlen > 0)
+int _loop_http_response_onvif(struct repeater_stream *repstream,
+							  struct sockstream *in,
+							  struct sockstream *out,
+							  struct buffdata *buffcache)
+{
+	int ret;
+	char *http_heard = NULL;
+	int httpheadlen = 0;
+	char *strhead;
+	const char *end;
+	char cacheline[2024];
+	int linelen;
+
+	//printf("%s", buffcache->data);
 	{
-		char *ptindex, *ptend;
-		const char *end = buffcache->data + httpheadlen;
-		int ret;
-
-		ptindex = buffcache->data;
-		while (ptindex < end)
+		httpheadlen = http_heard_end(buffcache->data, buffcache->index);
+		if (httpheadlen == -1)
 		{
-			ptend = strchr(ptindex, '\n');
-			if (ptend)
-				ptend++;
+			printf("not read http head \n");
+			return -1;
+		}
+		strhead = buffcache->data;
+		end = buffcache->data + httpheadlen;
 
-			if (!ptend)
-			{ //data error
-				break;
+		http_heard = (char *)malloc(httpheadlen + 1);
+		memcpy(http_heard, strhead, httpheadlen);
+		http_heard[httpheadlen] = 0;
+		int http_heard_index = 0;
+		int httpcode;
+		while (strhead < end)
+		{
+			ret = string_getline(strhead, cacheline, sizeof(cacheline));
+			strhead += ret;
+			//printf(">>%s", cacheline);
+			if (http_heard_index == 0)
+			{
+				sscanf(cacheline, "%*[^ ] %d", &httpcode);
+				in->info_http_head.httpcode = httpcode;
 			}
-			linelen = ptend - ptindex;
-			memcpy(cacheline, ptindex, linelen);
-			cacheline[linelen] = 0;
-			printf("%s", cacheline);
-
 			if (strncasecmp(cacheline, "Content-Length:", strlen("Content-Length:")) == 0)
 			{
 				in->info_http_head.contentLength = atoi(cacheline + strlen("Content-Length:"));
 			}
-			if (strncasecmp(cacheline, "Host:", 5) == 0)
-			{
-				snprintf(cacheline, sizeof(cacheline), "Host: %s:%d\r\n", out->localip, out->local_port);
-				linelen = strlen(cacheline);
-				printf(">change>%s", cacheline);
-			}
-
-			ret = sockstream_send(out, cacheline, linelen);
-
-			if (ptindex[0] == '\n' || (ptindex[0] == '\r' && ptindex[1] == '\n'))
-			{
-				break;
-			}
-			ptindex = ptend;
+			http_heard_index++;
 		}
 
 		buffcache->index -= httpheadlen;
 		memcpy(buffcache->data, buffcache->data + httpheadlen, buffcache->index);
 		printf("-------other:%d----\n", buffcache->index);
-		printf("ContentLength:%d\n", in->info_http_head.contentLength);
+		printf("Content-Length:%d\n", in->info_http_head.contentLength);
+	}
+
+	char *xmlstring = NULL;
+	int xmllength = 0;
+	//分离http头数据
+
+	log_d("onvif response\n");
+	if (in->info_http_head.contentLength > 0)
+	{
+		xmlstring = (char *)calloc(1, in->info_http_head.contentLength + 1);
+		memcpy(xmlstring, buffcache->data, buffcache->index);
+		xmllength = buffcache->index;
+		buffcache->index = 0;
+
+		printf("xmlength=%d\n", xmllength);
+
+		if (xmllength < in->info_http_head.contentLength)
+		{
+			while (xmllength < in->info_http_head.contentLength)
+			{
+				ret = sockstream_recv(in, buffcache->data + buffcache->index, buffcache->size - buffcache->index); //预留100字节做备份
+
+				if (ret <= 0)
+				{
+					if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) //需要重新接收
+					{
+						usleep(1000);
+						continue;
+					}
+
+					log_d("recv err, ret=%d, %d [%s:%d]-[%s:%d] %d:%s\n", ret,
+						  in->fd,
+						  in->localip, in->local_port,
+						  in->remoteip, in->remote_port,
+						  errno, strerror(errno));
+					break;
+				}
+
+				memcpy(xmlstring + xmllength, buffcache->data, ret);
+				xmllength += ret;
+				printf(" read sum=%d\n", xmllength);
+			}
+		}
+
+		if (xmllength < in->info_http_head.contentLength)
+		{
+			ret = -1;
+			printf("read http context err\n");
+			free(xmlstring);
+			return -1;
+		}
+
+		char buff1[30];
+		char buff2[30];
+
+		//rtsp地址替换
+		if (repstream->repserver.serveraddr.port_rtsp)
+		{
+			snprintf(buff1, sizeof(buff1), "rtsp://%s:%d/", in->remoteip,
+					 repstream->repserver.toaddr.port_rtsp);
+
+			snprintf(buff2, sizeof(buff2), "rtsp://%s:%d/", out->localip,
+					 repstream->repserver.serveraddr.port_rtsp);
+
+			if (strstr(xmlstring, buff1))
+			{
+				log_d("replace [%s]->[%s]\n", buff1, buff2);
+				char *tmpstr = str_replace_new(xmlstring, buff1, buff2);
+				if (tmpstr)
+				{
+					free(xmlstring);
+					xmlstring = tmpstr;
+				}
+			}
+		}
+
+		//http 端口替换
+		snprintf(buff1, sizeof(buff1), "%s:%d", in->remoteip, in->remote_port);
+		snprintf(buff2, sizeof(buff2), "%s:%d", out->localip, out->local_port);
+
+		if (!strstr(xmlstring, buff1))
+		{
+			snprintf(buff1, sizeof(buff1), "%s", in->remoteip);
+			//snprintf(buff2, sizeof(buff2), "%s", out->localip);
+		}
+		if (strstr(xmlstring, buff1))
+		{
+			log_d("replace [%s]->[%s]\n", buff1, buff2);
+
+			char *tmpstr = str_replace_new(xmlstring, buff1, buff2);
+			if (tmpstr)
+			{
+				free(xmlstring);
+				xmlstring = tmpstr;
+			}
+		}
+
+		xmllength = strlen(xmlstring);
+		//GetStreamUriResponse 中的 rtsp 端口替换
+		strhead = http_heard;
+		end = http_heard + httpheadlen;
+
+		//printf("%s", http_heard, httpheadlen);
+		while (strhead < end)
+		{
+			ret = string_getline(strhead, cacheline, sizeof(cacheline));
+			strhead += ret;
+			printf("%s", cacheline);
+
+			if (strncasecmp(cacheline, "Content-Length:", strlen("Content-Length:")) == 0)
+			{
+				snprintf(cacheline, sizeof(cacheline), "Content-Length: %d\r\n", xmllength);
+			}
+			socket_send(out->fd, cacheline, strlen(cacheline));
+		}
+		if (http_heard)
+			free(http_heard);
+		printf("%.6s ...\n", xmlstring);
+		socket_send(out->fd, xmlstring, strlen(xmlstring));
+
+		free(xmlstring);
+		return -1;
+	}
+	else
+	{ //需要判断如果是200呢?怎么办?
+		printf("http_heard>>>\n%s", http_heard);
+		socket_send(out->fd, http_heard, httpheadlen);
+		free(http_heard);
+	}
+	return 0;
+}
+
+int _loop_http_head_response_in_out(struct repeater_stream *repstream,
+									struct sockstream *in,
+									struct sockstream *out,
+									struct buffdata *buffcache)
+{
+	int httpheadlen;
+	int rlen = 0;
+
+	httpheadlen = http_heard_end(buffcache->data, buffcache->index);
+
+	memset(&in->info_http_head, 0, sizeof(in->info_http_head));
+	if (httpheadlen <= 0)
+		return 0;
+
+	{
+		if (out->info_http_head.isonvif_head)
+		{
+			printf("this is onvif http response\n");
+			_loop_http_response_onvif(repstream, in, out, buffcache);
+			return -1;
+		}
+		else if (out->info_http_head.is_nvr_u32TransportProtocal)
+		{
+			return _loop_http_response_nvr(repstream, in, out, buffcache);
+		}
+		else
+		{
+			char cacheline[1024];
+			int linelen;
+			char *strhead;
+			const char *end = buffcache->data + httpheadlen;
+			int ret;
+
+			strhead = buffcache->data;
+			while (strhead < end)
+			{
+				ret = string_getline(strhead, cacheline, sizeof(cacheline));
+				strhead += ret;
+
+				if (strncasecmp(cacheline, "Content-Length:", strlen("Content-Length:")) == 0)
+				{
+					in->info_http_head.contentLength = atoi(cacheline + strlen("Content-Length:"));
+				}
+
+				linelen = strlen(cacheline);
+				ret = sockstream_send(out, cacheline, linelen);
+
+				printf("ret=%d>%s", ret, cacheline);
+			}
+
+			buffcache->index -= httpheadlen;
+			memcpy(buffcache->data, buffcache->data + httpheadlen, buffcache->index);
+			log_d("-------other:%d----\n", buffcache->index);
+			log_d("Content-Length:%d\n", in->info_http_head.contentLength);
+		}
 	}
 	return 0;
 }
@@ -811,7 +1145,7 @@ void *thread_run(void *arg)
 			_streamin = streams[i];
 			_streamout = i == 0 ? streams[1] : streams[0];
 
-			/////////////recv data///
+			//  recv data //
 			{
 				rlen = sockstream_recv(streams[i], buffcache.data + buffcache.index, buffcache.size - buffcache.index - 100); //预留100字节做备份
 
@@ -841,11 +1175,17 @@ void *thread_run(void *arg)
 						if (ishttprequest(buffcache.data, buffcache.index))
 						{
 							_streamin->protocol = PROTO_TYPE_HTTP_REQUEST;
-							log_d("recv ========= http request\n");
-							sockstream_debug_print(_streamin);
+							log_d("recv ========= http request %s\n", _streamin->description);
 							//is onvif http
 
-							ret = _loop_http_head_request_in_out(_streamin, _streamout, &buffcache);
+							ret = _loop_http_head_read(_streamin, &buffcache);
+							if (ret == -1)
+							{
+								loopflag = 0;
+								break;
+							}
+
+							ret = _loop_http_head_request_in_out(repstream, _streamin, _streamout, &buffcache);
 							if (ret == -1)
 							{
 								loopflag = 0;
@@ -855,10 +1195,16 @@ void *thread_run(void *arg)
 						if (ishttpresponse(buffcache.data, buffcache.index))
 						{
 							_streamin->protocol = PROTO_TYPE_HTTP_RESPONSE;
-							log_d("recv ========= http response\n");
+							log_d("recv ========= http response %s\n", _streamin->description);
 							sockstream_debug_print(_streamin);
+							ret = _loop_http_head_read(_streamin, &buffcache);
+							if (ret == -1)
+							{
+								loopflag = 0;
+								break;
+							}
 
-							ret = _loop_http_head_response_in_out(_streamin, _streamout, &buffcache);
+							ret = _loop_http_head_response_in_out(repstream, _streamin, _streamout, &buffcache);
 							if (ret == -1)
 							{
 								loopflag = 0;
@@ -872,7 +1218,7 @@ void *thread_run(void *arg)
 			} ///end recv
 			//printf("read len :%d \n", buffcache.index);
 			//剩下的为内容替换
-			if (buffcache.index == 0)
+			if (buffcache.index == 0 || loopflag == 0)
 				continue;
 			//收到数据后
 			//需要转发给另一个,如果另一个一直阻塞呢?需要判断下一个http头哦
@@ -886,19 +1232,27 @@ void *thread_run(void *arg)
 				char repstr1[20];
 				char repstr2[20];
 
-				strcpy(repstr1, _streamin->localip);
-				sprintf(repstr2, "%s:%d", _streamin->localip, _streamin->local_port);
-
-				if (strstr(buffcache.data, repstr2))
+				sprintf(repstr1, "%s:%d", _streamin->localip, _streamin->local_port);
+				if (strstr(buffcache.data, repstr1))
 				{
-					strcpy(repstr1, repstr2);
-					sprintf(repstr2, "%s:%d", _streamout->remoteip, _streamout->remote_port);
+					sprintf(repstr1, "%s:%d", _streamout->remoteip, _streamout->remote_port);
 				}
-				else if (strstr(buffcache.data, repstr1))
+				else
 				{
-					sprintf(repstr2, "%s", _streamout->remoteip);
+					strcpy(repstr1, _streamin->localip);
+					if (strstr(buffcache.data, repstr1))
+					{
+						strcpy(repstr2, _streamout->remoteip);
+					}
 				}
-				printf("request need replace str:[%s]->[%s]\n", repstr1, repstr2);
+				if (strstr(buffcache.data, repstr1))
+				{
+					log_d("request need replace str:[%s]->[%s]\n", repstr1, repstr2);
+					if (strlen(repstr1) == strlen(repstr2))
+					{
+						str_replace_(buffcache.data, repstr1, repstr2);
+					}
+				}
 			}
 			//out
 			if (_streamin->type == 1 && _streamin->protocol == PROTO_TYPE_HTTP_RESPONSE)
@@ -907,23 +1261,33 @@ void *thread_run(void *arg)
 				char repstr1[20];
 				char repstr2[20];
 
-				strcpy(repstr1, _streamin->remoteip);
-				sprintf(repstr2, "%s:%d", _streamin->remoteip, _streamin->remote_port);
+				sprintf(repstr1, "%s:%d", _streamin->remoteip, _streamin->remote_port);
 
-				if (strstr(buffcache.data, repstr2))
+				if (strstr(buffcache.data, repstr1))
 				{
-					strcpy(repstr1, repstr2);
 					sprintf(repstr2, "%s:%d", _streamout->localip, _streamout->local_port);
 				}
-				else if (strstr(buffcache.data, repstr1))
+				else
 				{
-					sprintf(repstr2, "%s", _streamout->localip);
+					strcpy(repstr1, _streamin->remoteip);
+					if (strstr(buffcache.data, repstr1))
+					{
+						sprintf(repstr2, "%s", _streamout->localip);
+					}
 				}
-
-				printf("response need replace str:[%s]->[%s]\n", repstr1, repstr2);
+				if (strstr(buffcache.data, repstr1))
+				{
+					log_d("response need replace str:[%s]->[%s]\n", repstr1, repstr2);
+					if (strlen(repstr1) == strlen(repstr2)) //长度相等就替换
+					{
+						str_replace_(buffcache.data, repstr1, repstr2);
+					}
+				}
 			}
 
-			printf("%d->%d, len=%d\n", _streamin->fd, _streamout->fd, buffcache.index);
+			fprintf(stderr, "%s->%s, len=%d\n", _streamin->description, _streamout->description, buffcache.index);
+			fprintf(stderr, "%s\n", buffcache.data);
+			fprintf(stderr, "==============================================\n");
 
 			struct pollfd pfdout[2];
 
@@ -975,7 +1339,7 @@ void *thread_run(void *arg)
 					}
 					buffcache.index -= ret;
 					slen += ret;
-					//printf("send len:%d \n", ret);
+					printf(" ->>%d\n", ret);
 				}
 			}
 
@@ -1032,9 +1396,13 @@ void repeater_dispatcher()
 	struct repeater_server repserver;
 
 	{
+		//192.168.0.198 admin Jzlx20150714!
 
 		//repeater_server_init(&repserver, "0.0.0.0", 8082, "14.215.177.38", 80);
-		repeater_server_init(&repserver, "0.0.0.0", 8082, "192.168.8.106", 8081);
+		//repeater_server_init(&repserver, "192.168.0.21", 80, "192.168.0.140", 80); HK
+		repeater_server_init(&repserver, "192.168.0.21", 80, "192.168.0.198", 80);
+		repserver.serveraddr.port_rtsp = 0; //554;
+		repserver.toaddr.port_rtsp = 0;		//554;
 
 		repserver.fd = socket_bind_tcp(repserver.serveraddr.ipstr, repserver.serveraddr.port, 1, 1);
 		if (repserver.fd == -1)
@@ -1122,6 +1490,14 @@ void repeater_dispatcher()
 					stream->outstream.local_port = ntohs(stream->outstream.addrlocal.sin_port);
 					stream->outstream.remote_port = ntohs(stream->outstream.addrremote.sin_port);
 
+					sprintf(stream->instream.description, "in %d (%s:%d-%s:%d)", stream->instream.fd,
+							stream->instream.remoteip, stream->instream.remote_port,
+							stream->instream.localip, stream->instream.local_port);
+
+					sprintf(stream->outstream.description, "out %d (%s:%d-%s:%d)", stream->outstream.fd,
+							stream->outstream.localip, stream->outstream.local_port,
+							stream->outstream.remoteip, stream->outstream.remote_port);
+
 					repeater_stream_debug_print(stream);
 
 					pthread_t pt;
@@ -1153,20 +1529,26 @@ int main(int argc, const char **argv)
 				"Cookie: BD_UPN=133352; H_PS_645EC=69b1RTU5Wl2O08cV%2FB9eRy8VjT39d4D7H2YX9veNW3ouiTje5VcxDvfIAG0\r\n"
 				"Upgrade-Insecure-Requests: 1\r\n"
 				"\r\n0xFFFFF";
-	char buff[500];
-	int blen = 0;
 
-	str_replace(src, "127.0.0.1", "9999999999", buff, sizeof(buff), &blen);
-	printf("%s", buff);
-	printf("len=%ld, blen=%d\n", strlen(buff), blen);
+	int len = http_heard_end(src, strlen(src));
 
-	{
-		char *ptr = str_replace_new(src, "0xFFFFF", "9999999999");
-		printf("==============================%ld==\n", strlen(ptr));
-		printf("%s", ptr);
-		printf("==========================\n");
-		free(ptr);
-	}
+	char *ptr = strndup(src, len);
+	printf("%s", ptr);
+	printf(">>> %d >> %d\n", len, strlen(ptr));
+	// char buff[500];
+	// int blen = 0;
+
+	// str_replace(src, "127.0.0.1", "9999999999", buff, sizeof(buff), &blen);
+	// printf("%s", buff);
+	// printf("len=%ld, blen=%d\n", strlen(buff), blen);
+
+	// {
+	// 	char *ptr = str_replace_new(src, "0xFFFFF", "9999999999");
+	// 	printf("==============================%ld==\n", strlen(ptr));
+	// 	printf("%s", ptr);
+	// 	printf("==========================\n");
+	// 	free(ptr);
+	// }
 
 	repeater_dispatcher();
 	return 0;
