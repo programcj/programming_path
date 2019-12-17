@@ -55,6 +55,12 @@ int strcmp_startwith(const char *str, const char *prefix, int toffset);
 //return 0 表示相等
 int strcmp_endwith(const char *str, const char *suffix);
 
+char *str_readline(const char *str);
+
+
+#define strncasecmpex(s1, s2) strncasecmp(s1, s2, strlen(s2))
+#define strncmpex(s1, s2) strncmp(s1, s2, strlen(s2))
+
 #ifdef __cplusplus
 }
 #endif

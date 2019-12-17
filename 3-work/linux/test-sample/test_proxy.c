@@ -91,7 +91,7 @@ int str_replace_(char *str, const char *strold, const char *strnew)
 	return 0;
 }
 
-char *str_replace(const char *src, const char *strold, const char *strnew, char *strto, int tolen, int *pnewlen)
+char *str_replace_r(const char *src, const char *strold, const char *strnew, char *strto, int tolen, int *pnewlen)
 {
 	const char *src_end = src + strlen(src);
 	const char *psrc = src;
@@ -133,7 +133,7 @@ char *str_replace(const char *src, const char *strold, const char *strnew, char 
 /**
  * 字符串替换方法1,需要释放返回值
  */
-char *str_replace_new(const char *str, const char *src, const char *dst)
+char *str_replace(const char *str, const char *src, const char *dst)
 {
 	const char *pos = str;
 	const char *src_end = str + strlen(str);
@@ -507,7 +507,7 @@ char *string_replace_ipinfo(const char *buff, const char *str_oldip, int port_ol
 	}
 
 	if (strstr(buff, str1))
-		str = str_replace_new(buff, str1, str2);
+		str = str_replace(buff, str1, str2);
 
 	return str;
 }
@@ -889,7 +889,7 @@ int _loop_http_response_nvr(struct repeater_stream *repstream,
 
 	if (strstr(buffcache->data, str1))
 	{
-		char *tmpstr = str_replace_new(buffcache->data, str1, str2);
+		char *tmpstr = str_replace(buffcache->data, str1, str2);
 		log_d("replace ip:[%s]->[%s]\n", str1, str2);
 		strcpy(buffcache->data, tmpstr);
 		buffcache->index = strlen(tmpstr);
@@ -1015,7 +1015,7 @@ int _loop_http_response_onvif(struct repeater_stream *repstream,
 			if (strstr(xmlstring, buff1))
 			{
 				log_d("replace [%s]->[%s]\n", buff1, buff2);
-				char *tmpstr = str_replace_new(xmlstring, buff1, buff2);
+				char *tmpstr = str_replace(xmlstring, buff1, buff2);
 				if (tmpstr)
 				{
 					free(xmlstring);
@@ -1044,7 +1044,7 @@ int _loop_http_response_onvif(struct repeater_stream *repstream,
 		{
 			log_d("replace [%s]->[%s]\n", buff1, buff2);
 
-			char *tmpstr = str_replace_new(xmlstring, buff1, buff2);
+			char *tmpstr = str_replace(xmlstring, buff1, buff2);
 			if (tmpstr)
 			{
 				free(xmlstring);
@@ -1757,6 +1757,8 @@ void TcpAccess_loop()
 {
 	repeater_dispatcher(_server, _server_count);
 }
+
+#define CONFIG_HAVE_TcpAccess_main 1
 
 #if CONFIG_HAVE_TcpAccess_main
 int main(int argc, const char **argv)

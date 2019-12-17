@@ -45,6 +45,17 @@ static int socket_get_ethtool(const char if_name)
     return edata.data;
 }
 
+/**
+ 当一个socket发生错误的时候，将使用一个名为so_error的变量记录对应的错误代码，这又叫做pending error，so_error为0时表示没有错误发生。
+ 一般来说，有2种方式通知进程有socket错误发生：
+1、进程阻塞在select中，有错误发生时，select将返回，并将发生错误的socket标记为可读写；
+2、如果进程使用信号驱动的I/O，将会有一个SIGIO产生并发往对应进程；
+此时，进程可以通过SO_ERROR取得具体的错误代码。getsockopt返回后，*optval指向的区域将存储错误代码，而so_error被设置为0。
+当so_error不为0时
+  如果进程对socket进行read操作，若此时接收缓存中没有数据可读，则read返回-1，且errno设置为so_error，so_error置为0，
+  否则将返回缓存中的数据而不是返回错误；
+  如果进行write操作，将返回-1，errno置为so_error，so_error清0。
+ **/
 #define socket_get_error(fd) \
     ({ int v=0; socklen_t len=sizeof(v); int ret=getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&v, &len); ret==-1?ret:v; })
 
@@ -119,6 +130,34 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v)
 
 #define socket_send_nosignal(fd, buff) send(fd, buff, strlen(buff), MSG_NOSIGNAL)
 
+static inline int socket_bind_tcp(const char *ip, int port, int reuseport, int reuseaddr)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int ret;
+    if (fd == -1)
+        return fd;
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+
+    inet_aton(ip, &addr.sin_addr);
+    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuseport, sizeof(int));
+    if (ret == -1)
+        goto _reterr;
+    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(int));
+    if (ret == -1)
+        goto _reterr;
+    ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    if (ret == -1)
+        goto _reterr;
+        
+    return fd;
+_reterr:
+    if (fd != -1)
+        close(fd);
+    return -1;
+}
+
 /**
  net.ipv4.tcp_keepalive_intvl = 20
  net.ipv4.tcp_keepalive_probes = 3
@@ -133,8 +172,11 @@ static inline int socket_setoptint(int fd, int leve, int opt, int v)
 #define socket_set_tcp_keepidle(fd, v) socket_setoptint(fd, IPPROTO_TCP, TCP_KEEPIDLE, v)
 #define socket_set_tcp_keepintvl(fd, v) socket_setoptint(fd, IPPROTO_TCP, TCP_KEEPINTVL, v)
 #define socket_set_tcp_keepcnt(fd, v) socket_setoptint(fd, IPPROTO_TCP, TCP_KEEPCNT, v)
+//禁用了Nagle算法,允许小包的发送
 #define socket_set_tcp_nodelay(fd, flag) socket_setoptint(fd, IPPROTO_TCP, TCP_NODELAY, flag)
 #define socket_set_ipv6only(fd, flag) socket_setoptint(fd, IPPROTO_IPV6, IPV6_V6ONLY, flag)
+
+//SO_RCVLOWAT和SO_SNDLOWAT选项分别表示TCP接收缓冲区和发送缓冲区的低水位标记。它们一般被I/O复用系统调用用来判断socket是否可读或可写
 
 //https://blog.csdn.net/qiaotokong/article/details/25560797
 static inline int socket_is_established(int fd)
