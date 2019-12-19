@@ -1679,13 +1679,16 @@ void *thread_run(void *arg)
 	linger.l_onoff = 1;  //0=off, nonzero=on(开关)
 	linger.l_linger = 0; //linger time(延迟时间)
 
-	setsockopt(repstream->instream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
-			   sizeof(struct linger));
+	if (repstream->instream.isclose)
+		setsockopt(repstream->instream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
+				   sizeof(struct linger));
+
 	shutdown(repstream->instream.fd, SHUT_RDWR);
 	close(repstream->instream.fd);
 
-	setsockopt(repstream->outstream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
-			   sizeof(struct linger));
+	if (repstream->outstream.isclose)
+		setsockopt(repstream->outstream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
+				   sizeof(struct linger));
 
 	shutdown(repstream->outstream.fd, SHUT_RDWR);
 	close(repstream->outstream.fd);
