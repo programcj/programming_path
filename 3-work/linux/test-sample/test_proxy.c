@@ -513,10 +513,12 @@ struct proto_http_info
 	int path_is_onvif;			  //
 	int path_is_cgi_bin_main_cgi; ///cgi-bin/main-cgi
 
-	int content_length; //内容长度
+	int content_length; //Content-Length: 内容长度
 	int iskeep_alive;
-	//int contentEncoding;
-	//Content-Encoding: gzip
+
+	int content_type; //Content-Type: [application/*][text/*][audio/*][video/*][image/*][message/*]..
+					  //int contentEncoding;
+					  //Content-Encoding: gzip
 
 	//int contentType;
 	//Content-Type: video/mp4
@@ -1241,6 +1243,13 @@ int _loop_http_head_response_in_out(struct repeater_stream *repstream,
 			{
 				in->info_http_head.content_length = atoi(ptr + strlen("Content-Length:"));
 			}
+			if (0 == strncasecmpex(ptr, "Content-Type:"))
+			{
+				if (strstr(ptr, "application/"))
+					in->info_http_head.content_type = 1;
+				if (strstr(ptr, "text/"))
+					in->info_http_head.content_type = 1;
+			}
 			ptr = strchr(ptr, '\n');
 			if (!ptr)
 				break;
@@ -1593,12 +1602,18 @@ void *thread_run(void *arg)
 					   _streamin->description,
 					   _streamout->description,
 					   buffcache.index);
-				if (buffcache.index > 100)
-					printf("%.100s ...\n", buffcache.data);
-				else if (buffcache.index > 20)
-					printf("%.20s ...\n", buffcache.data);
-				else
-					printf("%s\n ...", buffcache.data);
+				int show = 1;
+				if (_streamin->protocol == PROTO_TYPE_HTTP_RESPONSE && !_streamin->info_http_head.content_type)
+					show = 0;
+				if (show)
+				{
+					if (buffcache.index > 100 && isascii(buffcache.data[0]))
+						printf("%.100s ...\n", buffcache.data);
+					else if (buffcache.index > 20 && isascii(buffcache.data[0]))
+						printf("%.20s ...\n", buffcache.data);
+					else
+						printf("%s\n ...", buffcache.data);
+				}
 			}
 
 			struct pollfd pfdout[2];
