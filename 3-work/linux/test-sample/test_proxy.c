@@ -1682,6 +1682,8 @@ void *thread_run(void *arg)
 	if (repstream->instream.isclose)
 		setsockopt(repstream->instream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
 				   sizeof(struct linger));
+	else
+		usleep(1000 * 100);
 
 	shutdown(repstream->instream.fd, SHUT_RDWR);
 	close(repstream->instream.fd);
@@ -1689,6 +1691,8 @@ void *thread_run(void *arg)
 	if (repstream->outstream.isclose)
 		setsockopt(repstream->outstream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
 				   sizeof(struct linger));
+	else
+		usleep(1000 * 100);
 
 	shutdown(repstream->outstream.fd, SHUT_RDWR);
 	close(repstream->outstream.fd);
