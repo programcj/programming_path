@@ -18,7 +18,10 @@
 #include <linux/sockios.h>
 #include <sys/ioctl.h>
 
+//	socket_get_count_out_queue(fd, &outlen);
 #define socket_get_count_out_queue(fd, pending) ioctl(fd, SIOCOUTQ, pending)
+
+//	socket_get_count_in_queue(fds[0], &content_len);
 #define socket_get_count_in_queue(fd, pending) ioctl(fd, SIOCINQ, pending)
 
 #include <linux/ethtool.h>
