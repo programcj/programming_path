@@ -31,6 +31,94 @@
 #include <pthread.h>
 #include <signal.h>
 
+unsigned long os_gettimems()
+{
+	struct timespec tp;
+	clock_gettime(CLOCK_MONOTONIC, &tp);
+	long ms = tp.tv_sec * 100 + tp.tv_nsec / 1000 / 1000;
+	return ms;
+}
+////////////////////////////////////////////////////////////////////
+int socket_recv(int fd, void *data, int size)
+{
+	int ret;
+	int rlen = 0;
+
+	while (size)
+	{
+		ret = recv(fd, (uint8_t *)data + rlen, size, 0);
+		if (ret == 0)
+			return -1;
+		if (ret < 0)
+		{
+			if (errno == EAGAIN || errno == EINTR)
+				continue;
+			return -1;
+		}
+		size -= ret;
+		rlen += ret;
+	}
+	return rlen;
+}
+
+//如果一直阻塞呢?怎么办?
+int socket_send(int fd, void *data, int size)
+{
+	int slen = 0;
+	int ret;
+	while (slen < size)
+	{
+		ret = send(fd, (uint8_t *)data + slen, size - slen, 0);
+		if (ret == 0)
+		{
+			slen = -1;
+			break;
+		}
+		if (ret < 0)
+		{
+			if (errno == EAGAIN || errno == EINTR)
+			{
+				//printf("eagin :%d\n", fd);
+				usleep(1000);
+				continue;
+			}
+			slen = -1;
+			break;
+		}
+		slen += ret;
+	}
+	return slen;
+}
+
+int socket_recvline(int fd, char *linestr, int maxsize)
+{
+	int ret;
+	int rlen = 0;
+	char v;
+	char *ptr = linestr;
+
+	while (rlen < maxsize - 1)
+	{
+		ret = recv(fd, &v, 1, 0);
+		if (ret <= 0)
+		{
+			if (ret < 0 && (EAGAIN == errno || EWOULDBLOCK == errno || EINTR == errno))
+				continue;
+			return -1;
+		}
+
+		*ptr++ = v;
+		rlen++;
+
+		if (v == '\n')
+			break;
+	}
+	*ptr = 0;
+
+	return rlen;
+}
+/////////////////////////////////////////////////////////////////
+
 #define strncasecmpex(s1, s2) strncasecmp(s1, s2, strlen(s2))
 #define strncmpex(s1, s2) strncmp(s1, s2, strlen(s2))
 
@@ -204,7 +292,7 @@ int string_getline(const char *str, char *linestr, int linesize)
 
 int logprintf(const char *file, const char *function, int line, const char *format, ...)
 {
-	char tmstr[20];
+	char tmstr[25];
 	struct tm tm;
 	struct timeval tp;
 	const char *filename = strrchr(file, '/');
@@ -216,7 +304,7 @@ int logprintf(const char *file, const char *function, int line, const char *form
 	gettimeofday(&tp, NULL);
 	localtime_r(&tp.tv_sec, &tm);
 	strftime(tmstr, sizeof(tmstr), "%F %T", &tm);
-	printf("%s,%s,%s,%d:", tmstr, file, function, line);
+	printf("%s,%s,%s,%d:", tmstr, filename, function, line);
 	va_list v;
 	va_start(v, format);
 	vprintf(format, v);
@@ -425,10 +513,12 @@ struct proto_http_info
 	int path_is_onvif;			  //
 	int path_is_cgi_bin_main_cgi; ///cgi-bin/main-cgi
 
-	int content_length; //内容长度
+	int content_length; //Content-Length: 内容长度
 	int iskeep_alive;
-	//int contentEncoding;
-	//Content-Encoding: gzip
+
+	int content_type; //Content-Type: [application/*][text/*][audio/*][video/*][image/*][message/*]..
+					  //int contentEncoding;
+					  //Content-Encoding: gzip
 
 	//int contentType;
 	//Content-Type: video/mp4
@@ -456,6 +546,7 @@ struct sockstream
 	int tm_lastr; //最后接收时间
 	int tm_lastw; //最后发送时间
 	int isfirst;  //首次接收情况
+	int isclose;  //是否关闭
 };
 
 //替换此数据流
@@ -512,6 +603,61 @@ char *string_replace_ipinfo(const char *buff, const char *str_oldip, int port_ol
 	return str;
 }
 
+//阻塞发送
+int sockstream_sendblocking(struct sockstream *stream, void *data, size_t size)
+{
+	int slen = 0;
+	int ret;
+	while (slen < size)
+	{
+		ret = send(stream->fd, (uint8_t *)data + slen, size - slen, 0);
+		if (ret <= 0)
+		{
+			if (ret < 0 && (EAGAIN == errno || EWOULDBLOCK == errno || EINTR == errno))
+			{
+				usleep(1000 * 100); //100ms
+				continue;
+			}
+			slen = -1;
+			break;
+		}
+		slen += ret;
+	}
+	if (slen > 0)
+	{
+		stream->tm_lastw = time(NULL);
+	}
+	return slen;
+}
+
+//阻塞接收用不到
+// int sockstream_recvblocking(struct sockstream *stream, void *data, size_t size)
+// {
+// 	int ret;
+// 	int rlen = 0;
+// 	while (size)
+// 	{
+// 		ret = recv(stream->fd, (uint8_t *)data + rlen, size, 0);
+// 		if (ret <= 0)
+// 		{
+// 			if (ret < 0 && (EAGAIN == errno || EWOULDBLOCK == errno || EINTR == errno))
+// 			{
+// 				usleep(1000 * 100); //100ms
+// 				continue;
+// 			}
+// 			rlen = -1;
+// 			break;
+// 		}
+// 		size -= ret;
+// 		rlen += ret;
+// 	}
+// 	if (rlen > 0)
+// 	{
+// 		stream->tm_lastr = time(NULL);
+// 	}
+// 	return rlen;
+// }
+
 int sockstream_send(struct sockstream *stream, void *data, size_t len)
 {
 	int ret;
@@ -519,6 +665,12 @@ int sockstream_send(struct sockstream *stream, void *data, size_t len)
 	if (ret > 0 && len > 0)
 	{
 		stream->tm_lastw = time(NULL);
+	}
+	if (ret <= 0)
+	{
+		if (ret < 0 && (EAGAIN == errno || EWOULDBLOCK == errno || EINTR == errno))
+			return ret;
+		stream->isclose = 1;
 	}
 	return ret;
 }
@@ -529,6 +681,12 @@ int sockstream_recv(struct sockstream *stream, void *data, size_t len)
 	if (ret > 0 && len > 0)
 	{
 		stream->tm_lastr = time(NULL);
+	}
+	if (ret <= 0)
+	{
+		if (ret < 0 && (EAGAIN == errno || EWOULDBLOCK == errno || EINTR == errno))
+			return ret;
+		stream->isclose = 1;
 	}
 	return ret;
 }
@@ -545,90 +703,6 @@ void repeater_server_init(struct repeater_server *item,
 	item->toaddr.port_rtsp = dst_port_rtsp;
 }
 
-int socket_recv(int fd, void *data, int size)
-{
-	int ret;
-	int rlen = 0;
-
-	while (size)
-	{
-		ret = recv(fd, (uint8_t *)data + rlen, size, 0);
-		if (ret == 0)
-			return -1;
-		if (ret < 0)
-		{
-			if (errno == EAGAIN || errno == EINTR)
-				continue;
-			return -1;
-		}
-		size -= ret;
-		rlen += ret;
-	}
-	return rlen;
-}
-
-//如果一直阻塞呢?怎么办?
-int socket_send(int fd, void *data, int size)
-{
-	int slen = 0;
-	int ret;
-	while (slen < size)
-	{
-		ret = send(fd, (uint8_t *)data + slen, size - slen, 0);
-		if (ret == 0)
-		{
-			slen = -1;
-			break;
-		}
-		if (ret < 0)
-		{
-			if (errno == EAGAIN || errno == EINTR)
-			{
-				//printf("eagin :%d\n", fd);
-				usleep(1000);
-				continue;
-			}
-			slen = -1;
-			break;
-		}
-		slen += ret;
-	}
-	return slen;
-}
-
-int socket_recv_line(int fd, char *linestr, int maxsize)
-{
-	int ret;
-	int rlen = 0;
-	char v;
-	char *ptr = linestr;
-
-	while (rlen < maxsize)
-	{
-		ret = recv(fd, &v, 1, 0);
-		if (ret == 0)
-			return -1;
-
-		if (ret < 0)
-		{
-			if (errno == EAGAIN || errno == EINTR)
-				continue;
-			return -1;
-		}
-		//log_d(" %c ", v);
-		*ptr++ = v;
-		rlen++;
-
-		if (v == '\n')
-		{
-			*ptr++ = 0;
-			break;
-		}
-	}
-
-	return rlen;
-}
-
 int poll_isin(int fd)
 {
 	struct pollfd pfd;
@@ -637,7 +711,7 @@ int poll_isin(int fd)
 	pfd.events = POLLIN;
 	pfd.revents = 0;
 	ret = poll(&pfd, 1, 0);
-	return pfd.revents & POLLIN == POLLIN ? 1 : 0;
+	return (pfd.revents & POLLIN) == POLLIN ? 1 : 0;
 }
 
 int poll_isout(int fd)
@@ -648,12 +722,12 @@ int poll_isout(int fd)
 	pfd.events = POLLOUT;
 	pfd.revents = 0;
 	ret = poll(&pfd, 1, 0);
-	return pfd.revents & POLLOUT == POLLOUT ? 1 : 0;
+	return (pfd.revents & POLLOUT) == POLLOUT ? 1 : 0;
 }
 
 struct buffdata
 {
-	char data[1024 * 20]; //20K=20480, 13926
+	char data[1024 * 30]; //30K=30720 20K=20480
 	int index;
 	int size;
 };
@@ -781,7 +855,6 @@ int _loop_http_head_request_in_out(struct repeater_stream *repstream,
 							usleep(1000);
 							continue;
 						}
-
 						log_d("recv err, ret=%d, %d [%s:%d]-[%s:%d] %d:%s\n", ret,
 							  in->fd,
 							  in->localip, in->local_port,
@@ -901,7 +974,7 @@ int _loop_http_response_nvr(struct repeater_stream *repstream,
 		//转发数据内容的时候的处理
 	}
 	//需要转发
-	ret = socket_send(out->fd, http_heard, strlen(http_heard));
+	ret = sockstream_send(out, http_heard, strlen(http_heard));
 	if (ret != -1)
 		ret = 0;
 	//socket_send(out->fd, buffcache->data, buffcache->index);
@@ -1068,18 +1141,18 @@ int _loop_http_response_onvif(struct repeater_stream *repstream,
 			{
 				snprintf(cacheline, sizeof(cacheline), "Content-Length: %d\r\n", xmllength);
 			}
-			socket_send(out->fd, cacheline, strlen(cacheline));
+			sockstream_send(out, cacheline, strlen(cacheline));
 		}
 
 		if (xmllength > 50)
 			log_d("%.50s ...\n", xmlstring);
-		ret = socket_send(out->fd, xmlstring, strlen(xmlstring));
+		ret = sockstream_send(out, xmlstring, strlen(xmlstring));
 	} //in content_length>0
 	else
 	{
 		//需要判断如果是200呢?怎么办?
 		log_d("http_heard>>>\n%s", http_heard);
-		ret = socket_send(out->fd, http_heard, httpheadlen);
+		ret = sockstream_send(out, http_heard, httpheadlen);
 
 		if (http_response_code == 200)
 		{
@@ -1117,7 +1190,7 @@ int _loop_http_response_onvif(struct repeater_stream *repstream,
 				buffcache->data[buffcache->index] = 0;
 
 				//ret = sockstream_send(out, buffcache->data, buffcache->index);
-				ret_s = socket_send(out->fd, buffcache->data, buffcache->index);
+				ret_s = sockstream_send(out, buffcache->data, buffcache->index);
 				if (ret_s == -1)
 					break;
 
@@ -1169,6 +1242,13 @@ int _loop_http_head_response_in_out(struct repeater_stream *repstream,
 			if (0 == strncasecmpex(ptr, "Content-Length:"))
 			{
 				in->info_http_head.content_length = atoi(ptr + strlen("Content-Length:"));
+			}
+			if (0 == strncasecmpex(ptr, "Content-Type:"))
+			{
+				if (strstr(ptr, "application/"))
+					in->info_http_head.content_type = 1;
+				if (strstr(ptr, "text/"))
+					in->info_http_head.content_type = 1;
 			}
 			ptr = strchr(ptr, '\n');
 			if (!ptr)
@@ -1287,7 +1367,7 @@ void *thread_run(void *arg)
 	prctl(PR_SET_NAME, pname);
 
 	buffcache.index = 0;
-	buffcache.size = sizeof(buffcache.data);
+	buffcache.size = sizeof(buffcache.data) - 1;
 
 	repeater_stream_reg(repstream);
 
@@ -1315,6 +1395,9 @@ void *thread_run(void *arg)
 
 	//net.ipv4.tcp_tw_recycle = 1
 
+	unsigned long ms1 = os_gettimems();
+	unsigned long ms2;
+
 	while (loopflag)
 	{
 		memset(pfdreads, 0, sizeof(pfdreads));
@@ -1326,7 +1409,16 @@ void *thread_run(void *arg)
 
 		ret = poll(pfdreads, 2, 200);
 		if (ret == 0)
+		{
+			ms2 = os_gettimems();
+			if (ms2 - ms1 > 5)
+			{
+				streams[0]->isfirst = 0;
+				streams[1]->isfirst = 0;
+				ms1 = ms2;
+			}
 			continue;
+		}
 
 		if (ret < 0)
 		{
@@ -1338,6 +1430,7 @@ void *thread_run(void *arg)
 		{
 			if (pfdreads[i].revents & (POLLERR | POLLNVAL | POLLHUP))
 			{
+				streams[i]->isclose = 1;
 				log_d("POLLERR\n");
 				loopflag = 0;
 				break;
@@ -1345,6 +1438,7 @@ void *thread_run(void *arg)
 		}
 		if (!loopflag)
 			break;
+
 		//loop_handle_read_write
 		////////////////////////////////////////////////////////////////
 		for (i = 0; i < 2; i++)
@@ -1364,11 +1458,10 @@ void *thread_run(void *arg)
 					{
 						continue;
 					}
-
-					loopflag = 0;
 					log_d("recv err,ret=%d,%s,%d:%s\n", rlen,
 						  streams[i]->description,
 						  errno, strerror(errno));
+					loopflag = 0;
 					break;
 				}
 				buffcache.index += rlen;
@@ -1506,15 +1599,21 @@ void *thread_run(void *arg)
 				_streamin->protocol == PROTO_TYPE_HTTP_RESPONSE)
 			{
 				printf("in2out: %s->%s, len=%d\n",
-						_streamin->description,
-						_streamout->description,
-						buffcache.index);
-				if (buffcache.index > 100)
-					printf("%.100s ...\n", buffcache.data);
-				else if(buffcache.index > 20)
-					printf("%.20s ...\n", buffcache.data);
-				else
-					printf("%s\n ...", buffcache.data);
+					   _streamin->description,
+					   _streamout->description,
+					   buffcache.index);
+				int show = 1;
+				if (_streamin->protocol == PROTO_TYPE_HTTP_RESPONSE && !_streamin->info_http_head.content_type)
+					show = 0;
+				if (show)
+				{
+					if (buffcache.index > 100 && isascii(buffcache.data[0]))
+						printf("%.100s ...\n", buffcache.data);
+					else if (buffcache.index > 20 && isascii(buffcache.data[0]))
+						printf("%.20s ...\n", buffcache.data);
+					else
+						printf("%s\n ...", buffcache.data);
+				}
 			}
 
 			struct pollfd pfdout[2];
@@ -1541,6 +1640,7 @@ void *thread_run(void *arg)
 				if (pfdout[0].revents & (POLLERR | POLLNVAL | POLLHUP))
 				{
 					slen = -1;
+					_streamout->isclose = 1;
 					log_d("poll revent err:%d\n", pfdout[0].fd);
 					break;
 				}
@@ -1548,6 +1648,7 @@ void *thread_run(void *arg)
 				if (pfdout[1].revents & (POLLERR | POLLNVAL | POLLHUP))
 				{
 					slen = -1;
+					_streamin->isclose = 1;
 					log_d("poll revent err:%d\n", pfdout[1].fd);
 					break;
 				}
@@ -1593,14 +1694,20 @@ void *thread_run(void *arg)
 	linger.l_onoff = 1;  //0=off, nonzero=on(开关)
 	linger.l_linger = 0; //linger time(延迟时间)
 
-	setsockopt(repstream->instream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
-			   sizeof(struct linger));
-
-	setsockopt(repstream->outstream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
-			   sizeof(struct linger));
+	if (repstream->instream.isclose)
+		setsockopt(repstream->instream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
+				   sizeof(struct linger));
+	else
+		usleep(1000 * 100);
 
 	shutdown(repstream->instream.fd, SHUT_RDWR);
 	close(repstream->instream.fd);
+
+	if (repstream->outstream.isclose)
+		setsockopt(repstream->outstream.fd, SOL_SOCKET, SO_LINGER, (const void *)&linger,
+				   sizeof(struct linger));
+	else
+		usleep(1000 * 100);
 
 	shutdown(repstream->outstream.fd, SHUT_RDWR);
 	close(repstream->outstream.fd);
@@ -1797,17 +1904,36 @@ int main(int argc, const char **argv)
 	// 	printf("==========================\n");
 	// 	free(ptr);
 	// }
-	// int fd = socket_connect("127.0.0.1", 12345);
-	// while (1)
-	// {
-	// 	if (poll_isin(fd))
-	// 	{
-	// 		printf("[%d] %02X need read data....\n", time(NULL));
-	// 	}
-	// }
-	struct repeater_server server[5];
 
-	repeater_server_init(&server[0], "192.168.0.21", 80, 0, "192.168.0.198", 80, 0);
+#if 0
+	char linestr[10];
+	int ret;
+	int fd;
+	fd = socket_connect("127.0.0.1", 12345);
+
+	//fd = open("/home/cc/test_proxy.c", O_RDONLY, 0666);
+	printf("fd=%d\n", fd);
+	while (1)
+	{
+		if (!poll_isin(fd))
+		{
+			continue;
+		}
+
+		ret = socket_recvline(fd, linestr, sizeof(linestr));
+		if (ret < 0)
+		{
+			printf("err :ret=%d, err=%d:%s\n", ret, errno, strerror;)
+			break;
+		}
+
+		printf("[%s]", linestr);
+	}
+#endif
+
+	struct repeater_server server[5];
+	memset(&server, 0, sizeof(server));
+	repeater_server_init(&server[0], "127.0.0.1", 8082, 0, "192.168.8.106", 8081, 0);
 	repeater_dispatcher(server, 1);
 	return 0;
 }
