@@ -25,11 +25,6 @@ int media_uri_push(const char *uri, const char *tourl) {
 	out_filename = tourl;
 
 	printf("%s->%s\n", uri, tourl);
-	//	in_filename = "rtsp://admin:123456@192.168.0.188:554/profile1";
-//	in_filename = "/opt/nfs/hg_base.h264";
-//	in_filename = "test.h264";
-//	out_filename = "rtmp://127.0.0.1:1936/live/1";	//输出 URL（Output URL）[RTMP]
-	//out_filename ="rtmp://192.168.0.59:1936/live/1";
 
 	//注1：av_register_all()这个方法在FFMPEG 4.0以后将不再建议使用，而且是非必需的，因此直接注释掉即可
 	//av_register_all();
@@ -125,12 +120,41 @@ int media_uri_push(const char *uri, const char *tourl) {
 	}
 
 	start_time = av_gettime();
+	int64_t _pts = 0;
+	int64_t _pts1 = 0;
+	int64_t _dts = 0;
+	int64_t _dts1 = 0;
+
 	while (1) {
 		AVStream *in_stream, *out_stream;
 		//Get an AVPacket
 		ret = av_read_frame(ifmt_ctx, &pkt);
+		if (ret == AVERROR_EOF) {
+			int result = av_seek_frame(ifmt_ctx, -1, 0 * AV_TIME_BASE,
+			AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+			printf(" >>>>>>>>>>>>>>>>>>>>> file eof, seek ret=%d start:%d\n",
+					result, ifmt_ctx->start_time);
+			if (result == 0)
+				continue;
+		}
 		if (ret < 0)
 			break;
+		if (pkt.stream_index != videoindex) {
+			continue;
+		}
+//		pkt.pts = av_gettime();
+//		pkt.dts=pkt.pts;
+
+		if (pkt.pts == 0) {
+			_pts = _pts1;
+			_dts = _dts1;
+		}
+
+		pkt.pts = _pts + pkt.pts;
+		pkt.dts = _dts + pkt.dts;
+		_pts1 = pkt.pts;
+		_dts1 = pkt.dts;
+
 		//FIX：No PTS (Example: Raw H.264)
 		//Simple Write PTS
 		if (pkt.pts == AV_NOPTS_VALUE) {
@@ -154,7 +178,6 @@ int media_uri_push(const char *uri, const char *tourl) {
 			int64_t now_time = av_gettime() - start_time;
 			if (pts_time > now_time)
 				av_usleep(pts_time - now_time);
-
 		}
 
 		in_stream = ifmt_ctx->streams[pkt.stream_index];
@@ -175,13 +198,15 @@ int media_uri_push(const char *uri, const char *tourl) {
 			//printf("Send %8d video frames to output URL\n", frame_index);
 			frame_index++;
 		}
+
+		//printf("pts=%ld %ld\n", pkt.pts, pkt.dts);
 		//ret = av_write_frame(ofmt_ctx, &pkt);
 		//printf("size=%d \n", pkt.size);
 		ret = av_interleaved_write_frame(ofmt_ctx, &pkt);
 
 		if (ret < 0) {
-			fprintf(stderr, "Error muxing packet, %s\n", av_err2str(ret));
-			//break;
+			fprintf(stderr, "out err [re=%d] %s\n", ret, av_err2str(ret));
+			break;
 		}
 		//注4：av_free_packet()可被av_free_packet()替换
 		//av_free_packet(&pkt);
@@ -194,6 +219,8 @@ int media_uri_push(const char *uri, const char *tourl) {
 	if (ofmt_ctx && !(ofmt->flags & AVFMT_NOFILE))
 		avio_close(ofmt_ctx->pb);
 	avformat_free_context(ofmt_ctx);
+
+	printf("quit: %s->%s\n", uri, tourl);
 	if (ret < 0 && ret != AVERROR_EOF) {
 		printf("Error occurred.\n");
 		return -1;
@@ -251,7 +278,7 @@ int main(int argc, char* argv[]) {
 		strcpy(uri, "rtsp://admin:123456@192.168.0.188:554/profile1");
 
 	if (strlen(tourl) == 0)
-		strcpy(tourl, "rtmp://127.0.0.1:1936/live/1");
+		strcpy(tourl, "rtmp://127.0.0.1:1936/live");
 
 	int i;
 	pthread_t pt;
@@ -267,4 +294,5 @@ int main(int argc, char* argv[]) {
 	}
 	pause();
 }
+
 
