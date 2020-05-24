@@ -14,6 +14,9 @@ sample-clog: libptools
 sample-carray: libptools
 	$(CC) $(CFLAG) sample-carray.c -o sample-carray.exe $(LDFLAGS)
 	
+test_proxy:
+	$(CC) $(CFLAG) test_proxy.c -o test_proxy.exe $(LDFLAGS)
+	
 clean:
 	rm *.out
 	rm *.exe
