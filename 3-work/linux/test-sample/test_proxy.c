@@ -540,6 +540,7 @@ struct sockstream
 	int remote_port;
 
 	char description[100];
+
 	enum protocoltype protocol; //0=unknow, 1=http
 	struct proto_http_info info_http_head;
 
@@ -1365,6 +1366,7 @@ void *thread_run(void *arg)
 	char pname[16];
 	sprintf(pname, "T:%d<->%d", repstream->instream.fd, repstream->outstream.fd);
 	prctl(PR_SET_NAME, pname);
+	log_d("start thread [%s]\n", pname);
 
 	buffcache.index = 0;
 	buffcache.size = sizeof(buffcache.data) - 1;
@@ -1379,7 +1381,7 @@ void *thread_run(void *arg)
 	socket_nonblock(repstream->instream.fd, 1);
 	socket_nonblock(repstream->outstream.fd, 1);
 
-	log_d("start thread.....\n");
+	
 	struct pollfd pfdreads[2];
 	int loopflag = 1;
 
@@ -1431,7 +1433,7 @@ void *thread_run(void *arg)
 			if (pfdreads[i].revents & (POLLERR | POLLNVAL | POLLHUP))
 			{
 				streams[i]->isclose = 1;
-				log_d("POLLERR\n");
+				log_d("POLLERR %s\n", streams[i]->description);
 				loopflag = 0;
 				break;
 			}
@@ -1792,7 +1794,7 @@ void repeater_dispatcher(struct repeater_server *servers, int count)
 				continue;
 			break;
 		}
-		log_d("next..\n", time(NULL));
+		log_d("next..%d\n", time(NULL));
 		for (i = 0; i < eplen; i++)
 		{
 			repseritem = ((typeof(repseritem))(events[i].data.ptr));
@@ -1933,7 +1935,11 @@ int main(int argc, const char **argv)
 
 	struct repeater_server server[5];
 	memset(&server, 0, sizeof(server));
-	repeater_server_init(&server[0], "127.0.0.1", 8082, 0, "192.168.8.106", 8081, 0);
+	repeater_server_init(&server[0], "0.0.0.0", 37777, 0, "192.168.0.99", 58888, 0);
+
+	//mkfifo /tmp/fifo
+	//cat /tmp/fifo | nc 192.168.0.57 8080 | nc localhost 8080 >/tmp/fifo
+
 	repeater_dispatcher(server, 1);
 	return 0;
 }

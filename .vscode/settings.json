@@ -17,8 +17,7 @@
         "socket.h": "c",
         "netdb.h": "c",
         "packet.h": "c",
-        "if_packet.h": "c"
-    },
-    "editor.minimap.maxColumn": 20,
-    "editor.fontFamily": "monospace"
+        "if_packet.h": "c",
+        "ioctl.h": "c"
+    }
 }

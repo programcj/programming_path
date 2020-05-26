@@ -550,3 +550,92 @@ int ffmpeg_NV12ToYUV420PFrame(uint8_t *data, int w, int h, AVFrame *j420pFrame) 
 	return 0;
 }
 
+void ffmpeg_yuv420data_draw_box(int minx, int miny, int maxy, int maxx,
+		unsigned char *yuvdata, int width, int height)
+{
+	unsigned char *new_u, *new_v;
+	int x, y, v, cwidth, cblock;
+	unsigned char *new = yuvdata;
+
+	cwidth = width / 2;
+	cblock = (width * height) / 4;
+	x = width * height;
+	v = x + cblock;
+	new_u = yuvdata + x;
+	new_v = yuvdata + v;
+
+//	Y= 0.299*R' + 0.587*G' + 0.114*B'
+//	U= -0.147*R' - 0.289*G' + 0.436*B' = 0.492*(B'- Y')
+//	V= 0.615*R' - 0.515*G' - 0.100*B' = 0.877*(R'- Y')
+
+#define R 72
+#define G 61
+#define B 139
+
+	//Y表示(亮度)， U 、V代表色度
+	uint8_t _YColor = R;  //R
+	uint8_t _VColor = G;  //G
+	uint8_t _UColor = B;    //B
+
+
+//	_YColor = 0.299 * R + 0.587 * G + 0.114 * B;
+//	_UColor = -0.147 * R - 0.289 * G + 0.436 * B; // = 0.492*(B'- Y')
+//	_VColor = 0.615 * R - 0.515 * G - 0.100 * B; //0.877*(R'- Y')
+
+	{ /* Draw a red box on normal images. */
+		int width_miny = width * miny;
+		int width_maxy = width * maxy;
+		int cwidth_miny = cwidth * (miny / 2);
+		int cwidth_maxy = cwidth * (maxy / 2);
+
+		for (x = minx + 2; x <= maxx - 2; x += 2)
+		{
+			int width_miny_x = x + width_miny;
+			int width_maxy_x = x + width_maxy;
+			int cwidth_miny_x = x / 2 + cwidth_miny;
+			int cwidth_maxy_x = x / 2 + cwidth_maxy;
+
+			new_u[cwidth_miny_x] = _UColor;
+			new_u[cwidth_maxy_x] = _UColor;
+			new_v[cwidth_miny_x] = _VColor;
+			new_v[cwidth_maxy_x] = _VColor;
+
+			new[width_miny_x] = _YColor;
+			new[width_maxy_x] = _YColor;
+
+			new[width_miny_x + 1] = _YColor;
+			new[width_maxy_x + 1] = _YColor;
+
+			new[width_miny_x + width] = _YColor;
+			new[width_maxy_x + width] = _YColor;
+
+			new[width_miny_x + 1 + width] = _YColor;
+			new[width_maxy_x + 1 + width] = _YColor;
+		}
+
+		for (y = miny; y <= maxy; y += 2)
+		{
+			int width_minx_y = minx + y * width;
+			int width_maxx_y = maxx + y * width;
+			int cwidth_minx_y = (minx / 2) + (y / 2) * cwidth;
+			int cwidth_maxx_y = (maxx / 2) + (y / 2) * cwidth;
+
+			new_u[cwidth_minx_y] = _UColor;
+			new_u[cwidth_maxx_y] = _UColor;
+			new_v[cwidth_minx_y] = _VColor;
+			new_v[cwidth_maxx_y] = _VColor;
+
+			new[width_minx_y] = _YColor;
+			new[width_maxx_y] = _YColor;
+
+			new[width_minx_y + width] = _YColor;
+			new[width_maxx_y + width] = _YColor;
+
+			new[width_minx_y + 1] = _YColor;
+			new[width_maxx_y + 1] = _YColor;
+
+			new[width_minx_y + width + 1] = _YColor;
+			new[width_maxx_y + width + 1] = _YColor;
+		}
+	}
+}
