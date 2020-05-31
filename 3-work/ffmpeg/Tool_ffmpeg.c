@@ -550,92 +550,104 @@ int ffmpeg_NV12ToYUV420PFrame(uint8_t *data, int w, int h, AVFrame *j420pFrame) 
 	return 0;
 }
 
-void ffmpeg_yuv420data_draw_box(int minx, int miny, int maxy, int maxx,
-		unsigned char *yuvdata, int width, int height)
+void ffmpeg_yuvbuff_draw_box(int width, int height, int format, uint8_t *image,
+						  int size, int x, int y, int w, int h, int R, int G, int B)
 {
-	unsigned char *new_u, *new_v;
-	int x, y, v, cwidth, cblock;
-	unsigned char *new = yuvdata;
+	/**
+	 * NV12
+	 *
+	 //Y Y Y Y
+	 //Y Y Y Y
+	 //Y Y Y Y
+	 //Y Y Y Y
+	 //U V U V
+	 //U V U V
+	 */
+	uint8_t *dstY = image;
+	uint8_t *dstUV = image + (width * height);
+	uint8_t *dstU = dstUV;
+	uint8_t *dstV = dstU + (width * height) / 4;
 
-	cwidth = width / 2;
-	cblock = (width * height) / 4;
-	x = width * height;
-	v = x + cblock;
-	new_u = yuvdata + x;
-	new_v = yuvdata + v;
+	int maxx = x + w;
+	int maxy = y + h;
+	int px; //横线
+	int py; //竖线
 
-//	Y= 0.299*R' + 0.587*G' + 0.114*B'
-//	U= -0.147*R' - 0.289*G' + 0.436*B' = 0.492*(B'- Y')
-//	V= 0.615*R' - 0.515*G' - 0.100*B' = 0.877*(R'- Y')
+	uint8_t _YColor = R;
+	uint8_t _UColor = B;
+	uint8_t _VColor = G;
 
-#define R 72
-#define G 61
-#define B 139
+	//通过Y的起点计算UV点: (x=5, y=6)  (Y= W*y+x, U_420P=V420P= (y/2)*(width/2)+x/2
 
-	//Y表示(亮度)， U 、V代表色度
-	uint8_t _YColor = R;  //R
-	uint8_t _VColor = G;  //G
-	uint8_t _UColor = B;    //B
+	for (px = x; px < maxx; px += 2) //画横线
+	{
+		//上横线
+		dstY[width * y + px] = _YColor;
+		dstY[width * y + px + 1] = _YColor;
+		dstY[width * y + width + px] = _YColor;
+		dstY[width * y + width + px + 1] = _YColor;
+		//下横线
+		dstY[width * maxy + px] = _YColor;
+		dstY[width * maxy + px + 1] = _YColor;
+		dstY[width * (maxy + 1) + px] = _YColor;
+		dstY[width * (maxy + 1) + px + 1] = _YColor;
 
-
-//	_YColor = 0.299 * R + 0.587 * G + 0.114 * B;
-//	_UColor = -0.147 * R - 0.289 * G + 0.436 * B; // = 0.492*(B'- Y')
-//	_VColor = 0.615 * R - 0.515 * G - 0.100 * B; //0.877*(R'- Y')
-
-	{ /* Draw a red box on normal images. */
-		int width_miny = width * miny;
-		int width_maxy = width * maxy;
-		int cwidth_miny = cwidth * (miny / 2);
-		int cwidth_maxy = cwidth * (maxy / 2);
-
-		for (x = minx + 2; x <= maxx - 2; x += 2)
+		if (AV_PIX_FMT_NV12 == format)
 		{
-			int width_miny_x = x + width_miny;
-			int width_maxy_x = x + width_maxy;
-			int cwidth_miny_x = x / 2 + cwidth_miny;
-			int cwidth_maxy_x = x / 2 + cwidth_maxy;
-
-			new_u[cwidth_miny_x] = _UColor;
-			new_u[cwidth_maxy_x] = _UColor;
-			new_v[cwidth_miny_x] = _VColor;
-			new_v[cwidth_maxy_x] = _VColor;
-
-			new[width_miny_x] = _YColor;
-			new[width_maxy_x] = _YColor;
-
-			new[width_miny_x + 1] = _YColor;
-			new[width_maxy_x + 1] = _YColor;
-
-			new[width_miny_x + width] = _YColor;
-			new[width_maxy_x + width] = _YColor;
-
-			new[width_miny_x + 1 + width] = _YColor;
-			new[width_maxy_x + 1 + width] = _YColor;
+			//上横线UV
+			dstUV[width * (y / 2) + px] = _UColor;
+			dstUV[width * (y / 2) + px + 1] = _VColor;
+			//下横线UV
+			dstUV[width * (maxy / 2) + px] = _UColor;
+			dstUV[width * (maxy / 2) + px + 1] = _VColor;
 		}
 
-		for (y = miny; y <= maxy; y += 2)
+		if (AV_PIX_FMT_YUV420P == format)
 		{
-			int width_minx_y = minx + y * width;
-			int width_maxx_y = maxx + y * width;
-			int cwidth_minx_y = (minx / 2) + (y / 2) * cwidth;
-			int cwidth_maxx_y = (maxx / 2) + (y / 2) * cwidth;
+			//上横线UV
+			dstU[width/2 * (y / 2) + px/2] = _UColor;
+			dstV[width/2 * (y / 2) + px/2] = _VColor;
 
-			new_u[cwidth_minx_y] = _UColor;
-			new_u[cwidth_maxx_y] = _UColor;
-			new_v[cwidth_minx_y] = _VColor;
-			new_v[cwidth_maxx_y] = _VColor;
+			//下横线UV
+			dstU[width/2 * (maxy / 2) + px/2] = _UColor;
+			dstV[width/2 * (maxy / 2) + px/2] = _VColor;
+		}
+	}
 
-			new[width_minx_y] = _YColor;
-			new[width_maxx_y] = _YColor;
+	for (py = y; py <= maxy; py += 2) //画竖线
+	{
+		//左竖线
+		dstY[width * py + x] = _YColor;
+		dstY[width * py + x + 1] = _YColor;
+		dstY[width * py + x + width] = _YColor;
+		dstY[width * py + x + width + 1] = _YColor;
 
-			new[width_minx_y + width] = _YColor;
-			new[width_maxx_y + width] = _YColor;
+		//右竖线
+		dstY[width * py + maxx] = _YColor;
+		dstY[width * py + maxx + 1] = _YColor;
+		dstY[width * (py + 1) + maxx] = _YColor;
+		dstY[width * (py + 1) + maxx + 1] = _YColor;
 
-			new[width_minx_y + 1] = _YColor;
-			new[width_maxx_y + 1] = _YColor;
+		if (AV_PIX_FMT_NV12 == format)
+		{
+			//左竖线
+			dstUV[width * (py / 2) + x] = _UColor;
+			dstUV[width * (py / 2) + x + 1] = _VColor;
 
-			new[width_minx_y + width + 1] = _YColor;
-			new[width_maxx_y + width + 1] = _YColor;
+			//右竖线
+			dstUV[width * (py / 2) + maxx] = _UColor;
+			dstUV[width * (py / 2) + maxx + 1] = _VColor;
+		}
+		if (AV_PIX_FMT_YUV420P == format)
+		{ //左竖线
+			dstU[width/2 * (py / 2) + x/2] = _UColor;
+			dstV[width/2 * (py / 2) + x/2] = _VColor;
+
+			//右竖线
+			dstU[width/2 * (py / 2) + maxx/2] = _UColor;
+			dstV[width/2 * (py / 2) + maxx/2] = _VColor;
 		}
 	}
 }
+
+

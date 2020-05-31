@@ -99,6 +99,9 @@ void ffmpeg_Yuv420pFrameToNV12Data(AVFrame *yuv420pframe, uint8_t *dscNv12Data);
 
 int ffmpeg_NV12ToYUV420PFrame(uint8_t *data, int w, int h, AVFrame *j420pFrame);
 
+void ffmpeg_yuvbuff_draw_box(int width, int height, int format, uint8_t *image,
+						  int size, int x, int y, int w, int h, int R, int G, int B);
+
 #ifdef __cplusplus
 }
 #endif
