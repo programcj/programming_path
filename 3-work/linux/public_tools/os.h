@@ -57,13 +57,41 @@ struct netstat_item
 	unsigned long rxq; //Recv-Q
 	unsigned long txq; //Send-Q
 	char local_addr[30]; //Local Address
+	int local_port;
+
 	char foreign_addr[30]; //Foreign Address
+	int foreign_port;
+
 	char state[15]; //ESTABLISHED
 	char timers[64];
 	unsigned long inode; //readlink("/proc/8679/fd/6", buff, sizeof(buff));
 };
 
 int os_net_status(void (*bkfun)(struct netstat_item *item, void *usr), void *usr);
+
+struct net_flow
+{
+	char name[10];
+	unsigned long rx_bytes;
+	unsigned long tx_bytes;
+};
+
+int os_net_rx_tx(struct net_flow *flow, int count);
+
+struct mem_info
+{
+	unsigned long totalMem;
+	unsigned long usedMem;
+	unsigned long freeMem;
+};
+
+void os_mem_info(struct mem_info *minfo);
+
+unsigned long os_clock_monotonic_ms();
+
+void os_pthread_set_name(const char *format, ...);
+
+extern float os_sys_cpu_use();
 
 #ifdef __cplusplus
 }

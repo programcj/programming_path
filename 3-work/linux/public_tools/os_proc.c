@@ -257,3 +257,65 @@ void proc_scan(struct list_head *plist)
 	}
 }
 
+int os_proc_exists(int pid, const char *comm, const char *args)
+{
+	struct list_head list;
+	struct proc_info *pos;
+	int exists = 0;
+
+	INIT_LIST_HEAD(&list);
+	proc_scan(&list);
+	list_for_each_entry(pos, &list, list)
+	{
+		if (strcmp(pos->comm, comm) == 0)
+		{
+			const char *argstr = strchr(pos->cmdline, ' ');
+			if (argstr)
+				argstr++; //有参数运行
+			else
+				argstr = ""; //无参数运行
+
+			if (strcmp(argstr, args) == 0 && pos->pid == pid)
+			{
+				exists = 1;
+				break;
+			}
+		}
+	}
+	proc_destroy(&list);
+	return exists;
+}
+
+int os_proc_find_pid(const char *comm, const char *args)
+{
+	struct list_head list;
+	struct proc_info *pos;
+	int proc_pid = -1;
+
+	INIT_LIST_HEAD(&list);
+	proc_scan(&list);
+	list_for_each_entry(pos, &list, list)
+	{
+		if (strcmp(pos->comm, comm) == 0)
+		{
+			const char *argstr = strchr(pos->cmdline, ' ');
+			if (argstr) //有参数运行
+			{
+				argstr++;
+			}
+			else
+			{ //无参数运行
+				argstr = "";
+			}
+
+			if (strcmp(argstr, args) == 0)
+			{
+				proc_pid = pos->pid;
+				break;
+			}
+		}
+	}
+	proc_destroy(&list);
+	return proc_pid;
+}
+

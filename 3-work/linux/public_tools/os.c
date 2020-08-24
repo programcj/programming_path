@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <stdarg.h>
+
 #include <fcntl.h>
 #include <dirent.h>
 #include <signal.h>
@@ -221,10 +223,45 @@ int os_net_default_gw(char gw[20])
 
 int os_net_get_ifname(struct eth_info *eth, int len)
 {
+	int num = 0;
+	char buf[1024];
+	char name[10];
+	FILE *fp = fopen("/proc/net/dev", "r");
+	if (fp)
+	{
+		/* skip headers */
+		fgets(buf, sizeof(buf), fp);
+		fgets(buf, sizeof(buf), fp);
+
+		while (fgets(buf, sizeof(buf), fp) != NULL)
+		{
+			char *ptr = strchr(buf, ':');
+			if (ptr == NULL ||
+						(*ptr++ = 0, sscanf(buf, "%s", name) != 1)
+						)
+			{
+				break;
+			}
+
+			if (strcmp(name, "lo") == 0)
+				continue;
+
+			//判断是否是虚拟网卡
+			if (os_net_isvirtual(name))
+				continue;
+
+			strcpy(eth[num].name, name);
+			os_net_mac(name, eth[num].mac);
+			os_net_ip(name, eth[num].ipaddress, eth[num].netmask);
+			num++;
+		}
+		fclose(fp);
+	}
+#if 0
 	int fd;
 	fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (fd < 0)
-		return -1;
+	return -1;
 
 	struct ifreq buf[20];
 	struct ifconf ifc;
@@ -248,11 +285,11 @@ int os_net_get_ifname(struct eth_info *eth, int len)
 
 		ret = ioctl(fd, SIOCGIFFLAGS, &buf[i]);
 		if (ret < 0)
-			continue;
+		continue;
 
 		ret = ioctl(fd, SIOCGIFHWADDR, &buf[i]);
 		if (ret < 0)
-			continue;
+		continue;
 		sprintf(eth[i].mac, "%02X:%02X:%02X:%02X:%02X:%02X",
 					(unsigned char) buf[i].ifr_hwaddr.sa_data[0],
 					(unsigned char) buf[i].ifr_hwaddr.sa_data[1],
@@ -263,17 +300,17 @@ int os_net_get_ifname(struct eth_info *eth, int len)
 
 		ret = ioctl(fd, SIOCGIFADDR, &buf[i]);
 		if (ret < 0)
-			continue;
+		continue;
 		inet_ntop(AF_INET, &((struct sockaddr_in*) (&buf[i].ifr_addr))->sin_addr, eth[i].ipaddress, 17);
 
 		ret = ioctl(fd, SIOCGIFNETMASK, &buf[i]);
 		if (ret < 0)
-			continue;
+		continue;
 
 		inet_ntop(AF_INET, &((struct sockaddr_in*) (&buf[i].ifr_netmask))->sin_addr, eth[i].netmask, 17);
 	}
 	close(fd);
-
+#endif
 	return num;
 }
 
@@ -457,20 +494,17 @@ static void _tcp_do_one(int lnr, const char *line, struct netstat_item *pitem)
 
 //	if (flag_all || (flag_lst && !rem_port) || (!flag_lst && rem_port))
 	{
-		snprintf(buffer, sizeof(buffer), "%d", htons(local_port));
+		//snprintf(buffer, sizeof(buffer), "%d", htons(local_port));
+//		if ((strlen(local_addr) + strlen(buffer)) > 22)
+//			local_addr[22 - strlen(buffer)] = '\0';
+//		strcat(local_addr, ":");
+//		strcat(local_addr, buffer);
+//		snprintf(buffer, sizeof(buffer), "%d", htons(rem_port));
+//		if ((strlen(rem_addr) + strlen(buffer)) > 22)
+//			rem_addr[22 - strlen(buffer)] = '\0';
 
-		if ((strlen(local_addr) + strlen(buffer)) > 22)
-			local_addr[22 - strlen(buffer)] = '\0';
-
-		strcat(local_addr, ":");
-		strcat(local_addr, buffer);
-		snprintf(buffer, sizeof(buffer), "%d", htons(rem_port));
-
-		if ((strlen(rem_addr) + strlen(buffer)) > 22)
-			rem_addr[22 - strlen(buffer)] = '\0';
-
-		strcat(rem_addr, ":");
-		strcat(rem_addr, buffer);
+//		strcat(rem_addr, ":");
+//		strcat(rem_addr, buffer);
 		timers[0] = '\0';
 //
 //		if (flag_opt)
@@ -506,7 +540,9 @@ static void _tcp_do_one(int lnr, const char *line, struct netstat_item *pitem)
 		pitem->rxq = rxq;
 		pitem->txq = txq;
 		strncpy(pitem->local_addr, local_addr, 30);
+		pitem->local_port = htons(local_port);
 		strncpy(pitem->foreign_addr, rem_addr, 30);
+		pitem->foreign_port = htons(rem_port);
 		strncpy(pitem->state, tcp_state[state], 15);
 		pitem->inode = inode;
 		strncpy(pitem->timers, timers, 64);
@@ -613,19 +649,19 @@ static void _udp_do_one(int lnr, const char *line, struct netstat_item *pitem)
 	{
 		inet_ntop(AF_INET, &localaddr.sin_addr.s_addr, local_addr, sizeof(local_addr));
 		//safe_strncpy(local_addr, ap->sprint((struct sockaddr *) &localaddr, flag_not), sizeof(local_addr));
-		snprintf(buffer, sizeof(buffer), "%d", htons(local_port));
-		if ((strlen(local_addr) + strlen(buffer)) > 22)
-			local_addr[22 - strlen(buffer)] = '\0';
-		strcat(local_addr, ":");
-		strcat(local_addr, buffer);
+//		snprintf(buffer, sizeof(buffer), "%d", htons(local_port));
+//		if ((strlen(local_addr) + strlen(buffer)) > 22)
+//			local_addr[22 - strlen(buffer)] = '\0';
+//		strcat(local_addr, ":");
+//		strcat(local_addr, buffer);
 
-		snprintf(buffer, sizeof(buffer), "%d", htons(rem_port));
+//		snprintf(buffer, sizeof(buffer), "%d", htons(rem_port));
 		inet_ntop(AF_INET, &remaddr.sin_addr.s_addr, rem_addr, sizeof(rem_addr));
 		//safe_strncpy(rem_addr, ap->sprint((struct sockaddr *) &remaddr,	flag_not), sizeof(rem_addr));
-		if ((strlen(rem_addr) + strlen(buffer)) > 22)
-			rem_addr[22 - strlen(buffer)] = '\0';
-		strcat(rem_addr, ":");
-		strcat(rem_addr, buffer);
+//		if ((strlen(rem_addr) + strlen(buffer)) > 22)
+//			rem_addr[22 - strlen(buffer)] = '\0';
+//		strcat(rem_addr, ":");
+//		strcat(rem_addr, buffer);
 
 		timers[0] = '\0';
 //		if (flag_opt)
@@ -652,11 +688,19 @@ static void _udp_do_one(int lnr, const char *line, struct netstat_item *pitem)
 		pitem->rxq = rxq;
 		pitem->txq = txq;
 		strncpy(pitem->local_addr, local_addr, 30);
+		pitem->local_port = htons(local_port);
 		strncpy(pitem->foreign_addr, rem_addr, 30);
+		pitem->foreign_port = htons(rem_port);
 		strncpy(pitem->state, tcp_state[state], 15);
 		pitem->inode = inode;
 		strncpy(pitem->timers, timers, 64);
 	}
+}
+
+void _show_netstat(struct netstat_item *pitem, void *usr)
+{
+	printf("%s %6lu %6lu %-23s %-23s %-12s [%lu] %s\n", pitem->proto, pitem->rxq, pitem->txq, pitem->local_addr, pitem->foreign_addr, pitem->state,
+				pitem->inode, pitem->timers);
 }
 
 int os_net_status(void (*bkfun)(struct netstat_item *pitem, void *usr), void *usr)
@@ -694,5 +738,146 @@ int os_net_status(void (*bkfun)(struct netstat_item *pitem, void *usr), void *us
 		} while (!feof(procinfo));
 		fclose(procinfo);
 	}
- 	return 0;
+	return 0;
 }
+
+int os_net_rx_tx(struct net_flow *flow, int count)
+{
+	FILE *fp = fopen("/proc/net/dev", "r");
+	char buf[1024];
+	char name[50];
+	unsigned long rx_bytes, rx_packets, rx_errs, rx_drops,
+				rx_fifo, rx_frame,
+				tx_bytes, tx_packets, tx_errs, tx_drops,
+				tx_fifo, tx_colls, tx_carrier, rx_multi;
+	int type;
+	int i = 0;
+
+	if (fp)
+	{
+		/* skip headers */
+		fgets(buf, sizeof(buf), fp);
+		fgets(buf, sizeof(buf), fp);
+
+		while (fgets(buf, sizeof(buf), fp) != NULL)
+		{
+			char *ptr;
+
+			/*buf[sizeof(buf) - 1] = 0; - fgets is safe anyway */
+			ptr = strchr(buf, ':');
+			if (ptr == NULL ||
+						(*ptr++ = 0, sscanf(buf, "%s", name) != 1)
+						)
+			{
+				break;
+			}
+			if (sscanf(ptr, "%lu%lu%lu%lu%lu%lu%lu%*d%lu%lu%lu%lu%lu%lu%lu",
+						&rx_bytes, &rx_packets, &rx_errs, &rx_drops,
+						&rx_fifo, &rx_frame, &rx_multi,
+						&tx_bytes, &tx_packets, &tx_errs, &tx_drops,
+						&tx_fifo, &tx_colls, &tx_carrier) != 14)
+				continue;
+			if (strcmp(name, "lo") == 0)
+				continue;
+			//判断是否是虚拟网卡
+			if (os_net_isvirtual(name))
+				continue;
+			if (i < count)
+			{
+				strncpy(flow[i].name, name, 10);
+				flow[i].rx_bytes = rx_bytes;
+				flow[i].tx_bytes = tx_bytes;
+				i++;
+			}
+			else
+			{
+				break;
+			}
+		}
+		fclose(fp);
+	}
+	return i;
+}
+
+void os_mem_info(struct mem_info *minfo)
+{
+	FILE *file = fopen("/proc/meminfo", "r");
+	char buffer[128];
+	unsigned long long int totalMem = 0;
+	unsigned long long int freeMem = 0;
+	unsigned long long int sharedMem = 0;
+	unsigned long long int buffersMem = 0;
+	unsigned long long int cachedMem = 0;
+	unsigned long long int totalSwap = 0;
+	unsigned long long int swapFree = 0;
+	unsigned long long int usedMem = 0;
+	unsigned long long int usedSwap = 0;
+	unsigned long long int shmem = 0;
+	unsigned long long int sreclaimable = 0;
+	unsigned long kb_slab = 0;
+	if (file)
+	{
+		while (fgets(buffer, 128, file))
+		{
+			if (strncmp(buffer, "MemTotal:", strlen("MemTotal:")) == 0)
+				sscanf(buffer + strlen("MemTotal:"), " %32llu kB", &totalMem);
+			if (strncmp(buffer, "MemFree:", strlen("MemFree:")) == 0)
+				sscanf(buffer + strlen("MemFree:"), " %32llu kB", &freeMem);
+			if (strncmp(buffer, "MemShared:", strlen("MemShared:")) == 0)
+				sscanf(buffer + strlen("MemShared:"), " %32llu kB", &sharedMem);
+			if (strncmp(buffer, "Buffers:", strlen("Buffers:")) == 0)
+				sscanf(buffer + strlen("Buffers:"), " %32llu kB", &buffersMem);
+			if (strncmp(buffer, "Cached:", strlen("Cached:")) == 0)
+				sscanf(buffer + strlen("Cached:"), " %32llu kB", &cachedMem);
+			if (strncmp(buffer, "SwapTotal:", strlen("SwapTotal:")) == 0)
+				sscanf(buffer + strlen("SwapTotal:"), " %32llu kB", &totalSwap);
+			if (strncmp(buffer, "SwapFree:", strlen("SwapFree:")) == 0)
+				sscanf(buffer + strlen("SwapFree:"), " %32llu kB", &swapFree);
+			if (strncmp(buffer, "SReclaimable:", strlen("SReclaimable:")) == 0)
+				sscanf(buffer + strlen("SReclaimable:"), " %32llu kB", &sreclaimable);
+			if (strncmp(buffer, "Shmem:", strlen("Shmem:")) == 0)
+				sscanf(buffer + strlen("Shmem:"), " %32llu kB", &shmem);
+			if (strncmp(buffer, "Slab:", strlen("Slab:")) == 0)
+				sscanf(buffer + strlen("Slab:"), " %lu kB", &kb_slab);
+		}
+		fclose(file);
+
+		//unsigned long kb_main_cached = cachedMem + kb_slab;
+		//buffersMem + kb_main_cached is free command buff/cache
+		cachedMem = cachedMem + sreclaimable - shmem;
+		usedSwap = totalSwap - swapFree;
+		usedMem = totalMem - freeMem - (buffersMem + cachedMem);  //htop
+		//kb_main_used = kb_main_total - kb_main_free - kb_main_cached - kb_main_buffers;
+		//buffersMem + cachedMem;
+
+		minfo->totalMem = totalMem;
+		minfo->usedMem = usedMem;
+		minfo->freeMem = totalMem - usedMem;
+	}
+}
+
+unsigned long os_clock_monotonic_ms()
+{
+	struct timespec times =
+				{ 0, 0 };
+	uint64_t time;
+	clock_gettime(CLOCK_MONOTONIC, &times);
+	//printf("CLOCK_MONOTONIC: %lu, %lu\n", times.tv_sec, times.tv_nsec);
+//	if (1 == type)
+//		time = times.tv_sec;
+//	else
+	time = times.tv_sec * 1000 + times.tv_nsec / 1000000;
+	//printf("time = %ld\n", time);
+	return time;
+}
+
+void os_pthread_set_name(const char *format, ...)
+{
+	char name[16];
+	va_list v;
+	va_start(v, format);
+	vsnprintf(name, sizeof(name), format, v);
+	va_end(v);
+	prctl(PR_SET_NAME, name);
+}
+

@@ -49,8 +49,10 @@ struct proc_info
 	long VmRSS;
 	unsigned long ticks; //utime+stime
 
-	unsigned long use_mem; //内存使用率
-	unsigned long use_cpu; //cpu使用率
+	//unsigned long use_mem; //内存使用率
+	float use_mem; //内存使用率
+	//unsigned long use_cpu; //cpu使用率
+	float use_cpu; //cpu使用率
 };
 
 void proc_scan(struct list_head *plist);
@@ -65,4 +67,3 @@ int os_proc_find_pid(const char *comm, const char *args);
 #endif
 
 #endif /* SRC_SRC_OS_PROC_H_ */
-
