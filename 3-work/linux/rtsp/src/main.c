@@ -95,49 +95,139 @@ struct URLInfo
 };
 
 /***
-v=0
-o=- 2251938210 2251938210 IN IP4 0.0.0.0
-s=Media Server
-c=IN IP4 0.0.0.0
+ v=0
+ o=- 2251938210 2251938210 IN IP4 0.0.0.0
+ s=Media Server
+ c=IN IP4 0.0.0.0
+ t=0 0
+ a=control:*
+ a=packetization-supported:DH
+ a=rtppayload-supported:DH
+ a=range:npt=now-
+ m=video 0 RTP/AVP 96
+ a=control:trackID=0
+ a=framerate:25.000000
+ a=rtpmap:96 H264/90000
+ a=fmtp:96 packetization-mode=1;profile-level-id=4D001F;sprop-parameter-sets=J00AH41oBQBbEAA=,KO4EYgA=
+ a=recvonly
+ m=application 0 RTP/AVP 107
+ a=control:trackID=4
+ a=rtpmap:107 vnd.onvif.metadata/90000
+ a=recvonly
+ =======================================================================
+ v=0
+o=- 1604995310197096 1 IN IP4 192.168.0.88
+s=profile1
+u=http:///
+e=admin@
 t=0 0
 a=control:*
-a=packetization-supported:DH
-a=rtppayload-supported:DH
-a=range:npt=now-
+a=range:npt=00.000-
 m=video 0 RTP/AVP 96
-a=control:trackID=0
-a=framerate:25.000000
+b=AS:5000
+a=control:track1
 a=rtpmap:96 H264/90000
-a=fmtp:96 packetization-mode=1;profile-level-id=4D001F;sprop-parameter-sets=J00AH41oBQBbEAA=,KO4EYgA=
 a=recvonly
-m=application 0 RTP/AVP 107
-a=control:trackID=4
-a=rtpmap:107 vnd.onvif.metadata/90000
+a=fmtp:96 profile-level-id=674d00; sprop-parameter-sets=Z00AKpY1QPAET8s3AQEBAg==,aO4xsg==; packetization-mode=1
+m=audio 0 RTP/AVP 8
+b=AS:1000
+a=control:track2
+a=rtpmap:8 pcma/8000
+a=ptime:40
 a=recvonly
 ***/
 struct SDPInfo
 {
 	//m=video 0 RTP/AVP 96
 	int media_video_port;
-	int media_video_proto;
+	char media_video_proto[10];
 	int media_video_format;
+
 	//a=rtpmap:96 H264/90000
 	int media_video_attr_rtpmap_format;
-	int media_video_attr_rtpmap_type; //H264
+	char media_video_attr_rtpmap_type[10]; //H264
 	int media_video_attr_rtpmap_rate; //90000
+
 	//a=framerate:25.000000
-	int media_video_framerate;
+	int media_video_attr_framerate;
+
 	//a=control:trackID=0
 	int media_video_attr_trackID;
+
 	//sps 大小in sprop-parameter-sets
+	int width;
+	int height;
 };
+
+const char *string_readline(const char *str, char *linestr)
+{
+	const char *ptr = str;
+	while (*ptr && *ptr != '\n' && *ptr != '\r')
+		ptr++;
+	strncpy(linestr, str, ptr - str);
+	linestr[ptr - str] = 0;
+
+	if (*ptr == '\r' && *(ptr + 1) == '\n')
+		return ptr + 2;
+	if (*ptr == '\n')
+		return ptr + 1;
+	return ptr;
+}
+
+void sdp_parse(const char *str, int len, struct SDPInfo *psdpinfo)
+{
+	//每行读取
+	char linestr[200];
+	const char *ptr = str;
+	int media_desc = 0, media_video = -1;
+	while (*ptr)
+	{
+		ptr = string_readline(ptr, linestr);
+		if (strncasecmp(linestr, "m=", 2) == 0)
+			media_desc++;
+		if (strncasecmp(linestr, "m=video ", strlen("m=video ")) == 0)
+		{
+			media_video = media_desc;
+			sscanf(linestr, "%*[^ ]%d %s %d", &psdpinfo->media_video_port,
+						psdpinfo->media_video_proto,
+						&psdpinfo->media_video_format);
+			continue;
+		}
+		if (media_desc != media_video)
+			continue;
+		if (strncasecmp(linestr, "a=framerate:", strlen("a=framerate:")) == 0)
+			sscanf(linestr, "%*[^:]:%d", &psdpinfo->media_video_attr_framerate);
+		if (strncasecmp(linestr, "a=control:trackID=", strlen("a=control:trackID=")) == 0)
+			sscanf(linestr, "%*[^:]%*[^=]=%d", &psdpinfo->media_video_attr_trackID);
+		if (strncasecmp(linestr, "a=rtpmap:", strlen("a=rtpmap:")) == 0)
+		{
+			sscanf(linestr, "%*[^:]:%d %[^/]/%d", &psdpinfo->media_video_attr_rtpmap_format,
+						psdpinfo->media_video_attr_rtpmap_type,
+						&psdpinfo->media_video_attr_rtpmap_rate);
+		}
+		if (strncasecmp(linestr, "a=fmtp:", strlen("a=fmtp:")) == 0)
+		{
+			//sprop-parameter-sets 取 sps
+		}
+		printf("sdp parline:%s\n", linestr);
+	}
+
+	printf("m=video [%d] [%s] [%d]\n", psdpinfo->media_video_port,
+				psdpinfo->media_video_proto,
+				psdpinfo->media_video_format);
+
+	printf("fps=%d, trackID:%d\n", psdpinfo->media_video_attr_framerate, psdpinfo->media_video_attr_trackID);
+	printf("rtpmap:%d %s/%d\n", psdpinfo->media_video_attr_rtpmap_format,
+				psdpinfo->media_video_attr_rtpmap_type,
+				psdpinfo->media_video_attr_rtpmap_rate);
+}
 
 typedef struct _RTSPClient
 {
 	char *url;
 	int fd;
 	struct URLInfo urlinfo;
-//sdpinfo
+	struct SDPInfo sdpinfo;
 } RTSPClient;
 
 int urldecode(const char *url, struct URLInfo *urlinfo)
@@ -291,7 +381,7 @@ int rtsp_response_recv(int fd, char **text, size_t *textlen)
 				}
 				if (ret > 0)
 				{
-					fwrite(buff, ret, 1, fp);
+					fwrite(buff, 1, ret, fp);
 					fflush(fp);
 					//printf("membuf:%s, %d\n", membuf, memlen);
 				}
@@ -313,6 +403,9 @@ int rtsp_response_recv(int fd, char **text, size_t *textlen)
 			}
 		}
 	}
+	buff[0] = 0;
+	fwrite(buff, 1, 1, fp);
+	fflush(fp);
 	fclose(fp);
 	if (memlen == 0)
 	{
@@ -332,7 +425,7 @@ int rtsp_response_recv(int fd, char **text, size_t *textlen)
 	return 0;
 }
 
-int rtsp_DESCRIBE_base(int fd, struct URLInfo *urlinfo, char *authstr)
+int rtsp_DESCRIBE_base(int fd, struct URLInfo *urlinfo, char *authstr, struct SDPInfo *psdpinfo)
 {
 	char url[100];
 	snprintf(url, sizeof(url), "DESCRIBE %s%s:%d%s RTSP/1.0\r\n", urlinfo->prefix, urlinfo->host, urlinfo->port, urlinfo->path);
@@ -376,20 +469,23 @@ int rtsp_DESCRIBE_base(int fd, struct URLInfo *urlinfo, char *authstr)
 	{
 		//需要得到 sdp内容
 		int head_len = string_http_heard_getlength(resp_text, strlen(resp_text));
+		int size = strlen(resp_text);
 		printf("--------SDP数据----------\n%s", resp_text + head_len);
 		//m: media descriptions
 		//a: attributes
+		sdp_parse(resp_text + head_len, size - head_len, psdpinfo);
 	}
 	if (resp_text)
 		free(resp_text);
 	return code;
 }
 
-int rtsp_DESCRIBE(int fd, struct URLInfo *urlinfo)
+int rtsp_DESCRIBE(int fd, struct URLInfo *urlinfo, struct SDPInfo *psdpinfo)
 {
 	int ret;
 	char authstr[300];
-	ret = rtsp_DESCRIBE_base(fd, urlinfo, authstr);
+	memset(authstr, 0, sizeof(authstr));
+	ret = rtsp_DESCRIBE_base(fd, urlinfo, authstr, psdpinfo);
 	if (ret == 401)
 	{
 		printf("auth:%s\n", authstr);
@@ -401,7 +497,7 @@ int rtsp_DESCRIBE(int fd, struct URLInfo *urlinfo)
 			base64_encode(pwd, strlen(pwd), base64str);
 			sprintf(urlinfo->Authorization, "Authorization: Basic %s\r\n", base64str);
 		}
-		ret = rtsp_DESCRIBE_base(fd, urlinfo, authstr);
+		ret = rtsp_DESCRIBE_base(fd, urlinfo, authstr, psdpinfo);
 		if (ret == 401)
 			return 401;
 	}
@@ -415,7 +511,7 @@ RTSPClient *RTSPClient_open(const char *url)
 		return NULL;
 	client->url = strdup(url);
 	urldecode(client->url, &client->urlinfo);
-
+	int ret;
 	int fd = socket_tcp(client->urlinfo.host, client->urlinfo.port);
 	if (fd == -1)
 	{
@@ -423,7 +519,7 @@ RTSPClient *RTSPClient_open(const char *url)
 	}
 	printf("connect success %d,[%s]\n", fd, client->urlinfo.host);
 	client->fd = fd;
-	rtsp_DESCRIBE(fd, &client->urlinfo);
+	ret = rtsp_DESCRIBE(fd, &client->urlinfo, &client->sdpinfo);
 	return client;
 }
 
