@@ -94,11 +94,50 @@ struct URLInfo
 	char Authorization[100];
 };
 
+/***
+v=0
+o=- 2251938210 2251938210 IN IP4 0.0.0.0
+s=Media Server
+c=IN IP4 0.0.0.0
+t=0 0
+a=control:*
+a=packetization-supported:DH
+a=rtppayload-supported:DH
+a=range:npt=now-
+m=video 0 RTP/AVP 96
+a=control:trackID=0
+a=framerate:25.000000
+a=rtpmap:96 H264/90000
+a=fmtp:96 packetization-mode=1;profile-level-id=4D001F;sprop-parameter-sets=J00AH41oBQBbEAA=,KO4EYgA=
+a=recvonly
+m=application 0 RTP/AVP 107
+a=control:trackID=4
+a=rtpmap:107 vnd.onvif.metadata/90000
+a=recvonly
+***/
+struct SDPInfo
+{
+	//m=video 0 RTP/AVP 96
+	int media_video_port;
+	int media_video_proto;
+	int media_video_format;
+	//a=rtpmap:96 H264/90000
+	int media_video_attr_rtpmap_format;
+	int media_video_attr_rtpmap_type; //H264
+	int media_video_attr_rtpmap_rate; //90000
+	//a=framerate:25.000000
+	int media_video_framerate;
+	//a=control:trackID=0
+	int media_video_attr_trackID;
+	//sps 大小in sprop-parameter-sets
+};
+
 typedef struct _RTSPClient
 {
 	char *url;
 	int fd;
 	struct URLInfo urlinfo;
+//sdpinfo
 } RTSPClient;
 
 int urldecode(const char *url, struct URLInfo *urlinfo)
@@ -117,29 +156,24 @@ int urldecode(const char *url, struct URLInfo *urlinfo)
 	pend = strchr(ptr, '/');
 	if (pend == NULL)
 		pend = url + len;
-	//decode username password
-	for (pos = ptr; pos < pend && *pos != '/'; pos++)
-	{
-		if (*pos == '@' && flagauth == 0)
-		{
-			flagauth = 1;
-			if (pos - ptr > sizeof(urlinfo->useranme))
-				printf("[%s]username length > %ld\n", url, sizeof(urlinfo->useranme));
-			else
-				strncpy(urlinfo->useranme, ptr, pos - ptr);
-			ptr = pos + 1;
-		}
+	//寻找  username:password@host:port
 
-		if (flagauth && *pos == ':')
-		{
-			if (pos - ptr > sizeof(urlinfo->password))
-				printf("[%s]password length > %ld\n", url, sizeof(urlinfo->password));
-			else
-				strncpy(urlinfo->password, ptr, pos - ptr);
-			pos++;
-			ptr = pos;
+	const char *pname_end = strchr(ptr, ':');
+	const char *phost_begin;
+
+	for (phost_begin = pend; phost_begin > ptr; phost_begin--)
+	{
+		if (*phost_begin == '@')
 			break;
-		}
+	}
+
+	if (*phost_begin == '@' && pname_end < pend)
+	{
+		flagauth = 1;
+		strncpy(urlinfo->useranme, ptr, pname_end - ptr);
+		ptr = pname_end + 1;
+		strncpy(urlinfo->password, ptr, phost_begin - ptr);
+		ptr = phost_begin + 1;
 	}
 	//
 	if (ptr >= pend)
@@ -198,15 +232,15 @@ int socket_tcp(const char *host, int port)
 		goto _err;
 	}
 
-	ret = connect(fd, (struct sockaddr *)&in, sizeof(in));
+	ret = connect(fd, (struct sockaddr *) &in, sizeof(in));
 	if (ret != 0)
 	{
-		fprintf(stderr, "not connect ot host [%s]\n", host);
+		fprintf(stderr, "not connect ot host [%s], %s\n", host, strerror(errno));
 		goto _err;
 	}
 	return fd;
 
-_err:
+	_err:
 	if (fd != -1)
 		close(fd);
 	return -1;
@@ -342,7 +376,7 @@ int rtsp_DESCRIBE_base(int fd, struct URLInfo *urlinfo, char *authstr)
 	{
 		//需要得到 sdp内容
 		int head_len = string_http_heard_getlength(resp_text, strlen(resp_text));
-		printf("SDP数据:%s", resp_text + head_len);
+		printf("--------SDP数据----------\n%s", resp_text + head_len);
 		//m: media descriptions
 		//a: attributes
 	}
@@ -367,7 +401,6 @@ int rtsp_DESCRIBE(int fd, struct URLInfo *urlinfo)
 			base64_encode(pwd, strlen(pwd), base64str);
 			sprintf(urlinfo->Authorization, "Authorization: Basic %s\r\n", base64str);
 		}
-
 		ret = rtsp_DESCRIBE_base(fd, urlinfo, authstr);
 		if (ret == 401)
 			return 401;
@@ -377,7 +410,7 @@ int rtsp_DESCRIBE(int fd, struct URLInfo *urlinfo)
 
 RTSPClient *RTSPClient_open(const char *url)
 {
-	RTSPClient *client = (RTSPClient *)calloc(sizeof(RTSPClient), 1);
+	RTSPClient *client = (RTSPClient *) calloc(sizeof(RTSPClient), 1);
 	if (client == NULL)
 		return NULL;
 	client->url = strdup(url);
@@ -386,7 +419,6 @@ RTSPClient *RTSPClient_open(const char *url)
 	int fd = socket_tcp(client->urlinfo.host, client->urlinfo.port);
 	if (fd == -1)
 	{
-
 		return NULL;
 	}
 	printf("connect success %d,[%s]\n", fd, client->urlinfo.host);
@@ -395,10 +427,26 @@ RTSPClient *RTSPClient_open(const char *url)
 	return client;
 }
 
+void urldecode_test(const char *url)
+{
+	struct URLInfo uinfo;
+	memset(&uinfo, 0, sizeof(uinfo));
+	printf("\nURL:%s\n", url);
+	urldecode(url, &uinfo);
+}
+
 int main(int argc, char **argv)
 {
-	const char *url = "rtsp://admin@admin:192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
+	const char *url = "rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
+	urldecode_test(url);
+#if 0
+	urldecode_test("rtsp://admin:admin@11@192.168.0.150:554/paht1");
+	urldecode_test("rtsp://admin:@192.168.0.150:554/paht1");
+	urldecode_test("rtsp://192.168.0.150:554/paht1");
+	urldecode_test("rtsp://:554/paht1");
+	urldecode_test("rtsp:///paht1");
+	urldecode_test("http://www.baidu.com/paht1");
+#endif
 	RTSPClient_open(url);
-
 	return 0;
 }
