@@ -1,7 +1,7 @@
 /*
  * main.c
  *
- *  Created on: 2020年6月24日
+ *  Created on: 2020年10月30日
  *      Author: cc
  *
  *                .-~~~~~~~~~-._       _.-~~~~~~~~~-.
@@ -19,805 +19,1193 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 #include <unistd.h>
-#include "log.h"
-#include <getopt.h>
-
-#include "rtmp.h"
+#include "base64.h"
+#include <poll.h>
+#include <errno.h>
+#include "md5.h"
 #include "sps_decode.h"
-#include "LibOnvif/SOAP_Onvif.h"
 
-#include "libavformat/avformat.h"
-#include "libavutil/mathematics.h"
-#include "libavcodec/avcodec.h"
-#include "libavutil/pixdesc.h"
-#include "libavutil/time.h"
+#define DEBUG 1
 
-#include "rtmp_h264.h"
-
-void h264_sps_parse(uint8_t *sps, int len)
+int string_http_head_get_content_length(const char *buffhead, int headlen)
 {
-	int width = 0, height = 0, fps = 0;
-	h264_decode_sps(sps, len, &width, &height, &fps);
-	printf("width: %d height:%d fps:%d\n", width, height, fps);
-}
-
-static void log_print_hex(uint8_t *data, int size, FILE *stream, int maxlen)
-{
-	uint8_t *ptr = data;
-	uint8_t *ptr_end = ptr + size;
-	int v;
-	int i = 0;
-	int prvpos = 0;
-	int hexlen = 0;
-	if (maxlen > 0 && maxlen < size)
-	{
-		ptr_end = ptr + maxlen;
-	}
+	const char *ptr = buffhead;
+	const char *ptr_end = buffhead + headlen;
+	int content_length = -1;
 	while (ptr < ptr_end)
 	{
-		fprintf(stream, "%02X ", *ptr);
-		hexlen = (i + 1) % 16;
-
-		if (hexlen == 0 || ptr + 1 >= ptr_end)
+		if (0 == strncmp(ptr, "Content-Length:", strlen("Content-Length:")))
 		{
-
-			while (hexlen != 0 && hexlen++ < 16)
-			{
-				fprintf(stream, "   ");
-			}
-			fprintf(stream, "|");
-			//fprintf(stream, "|[%2d,%2d]",  prvpos, i);
-			while (prvpos <= i)
-			{
-				v = ptr[prvpos - i]; //
-				if (v == '\n' || v == '\r')
-					v = '.';
-				fputc(v, stream);
-				prvpos++;
-			}
-			fprintf(stream, "|\n");
-			prvpos = i + 1;
+			content_length = atoi(ptr + strlen("Content-Length:"));
 		}
-		i++;
+		ptr = strchr(ptr, '\n');
+		if (!ptr)
+			break;
+		if (ptr + 2 < ptr_end)
+		{
+			if (ptr[1] == '\r' && ptr[2] == '\n')
+				break;
+		}
 		ptr++;
 	}
+	return content_length;
 }
 
-struct stream_in
+int string_http_heard_getlength(const char *buf, int len)
 {
-	//AVDictionary *opts;
-	AVFormatContext *fmt_ctx;
-	AVPacket pkt;
-	int video_index;
-	int video_frame_count;
+	const char *end = buf + len;
+	const char *ptr = buf;
 
-	int video_codec_id;
-	int width;
-	int height;
-	int fps;
-};
-
-void stream_in_close(struct stream_in *in)
-{
-	if (in->fmt_ctx)
-		avformat_close_input(&in->fmt_ctx);
-}
-
-int stream_in_open(struct stream_in *in, const char *url)
-{
-	int ret;
-	AVDictionary *opts = NULL;
-	av_dict_set(&opts, "rtsp_transport", "tcp", 0); //设置tcp or udp，默认一般优先tcp再尝试udp
-	av_dict_set(&opts, "stimeout", "3000000", 0);   //设置超时3秒
-
-//	av_dict_set(&opts, "probsize", "4096", 0);
-//	av_dict_set(&opts, "fflags", "nobuffer", 0);
-//  in->fmt_ctx=avformat_alloc_context();
-//  in->fmt_ctx->probesize = 20000000;
-//  in->fmt_ctx->max_analyze_duration = 2000;
-
-	ret = avformat_open_input(&in->fmt_ctx, url, 0, &opts);
-	if (ret)
-		goto _err;
-
-	if (opts)
-		av_dict_free(&opts);
-	//in->opts = opts;
-
-	ret = avformat_find_stream_info(in->fmt_ctx, 0);
-
-	if (ret < 0)
-		goto _err;
-
-	ret = av_find_best_stream(in->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-	if (ret < 0)
-		goto _err;
-	in->video_index = ret;
-
-	AVStream *stream_video = in->fmt_ctx->streams[ret];
-	//av_dump_format(in->fmt_ctx, ret, url, 0);
-	in->width = stream_video->codecpar->width;
-	in->height = stream_video->codecpar->height;
-	in->video_codec_id = stream_video->codecpar->codec_id;
-
-	const char *avcodocname = avcodec_get_name(stream_video->codecpar->codec_id);
-	printf("编码方式:%s\n", avcodocname);
-	printf("最低帧率:%f fps 平均帧率:%f fps\n", av_q2d(stream_video->r_frame_rate),
-				av_q2d(stream_video->avg_frame_rate));
-	printf("视频流比特率 :%fkbps\n", stream_video->codecpar->bit_rate / 1000.0);
-	return 0;
-
-	_err:
-	if (opts)
-		av_dict_free(&opts);
-	if (in->fmt_ctx)
-		avformat_close_input(&in->fmt_ctx);
-
-	return ret;
-}
-
-struct stream_out
-{
-	AVOutputFormat *ofmt;
-	AVFormatContext *ofmt_ctx;
-};
-
-int stream_out_open(struct stream_out *out, const char *url)
-{
-	int ret;
-	ret = avformat_alloc_output_context2(&out->ofmt_ctx, NULL, "flv", url); //RTMP
-	if (out->ofmt_ctx)
-		out->ofmt = out->ofmt_ctx->oformat;
-	return ret;
-}
-
-void stream_out_close(struct stream_out *out)
-{
-	if (out->ofmt_ctx && out->ofmt && !(out->ofmt->flags & AVFMT_NOFILE))
-		avio_close(out->ofmt_ctx->pb);
-	if (out->ofmt_ctx)
-		avformat_free_context(out->ofmt_ctx);
-	out->ofmt = NULL;
-	out->ofmt_ctx = NULL;
-}
-
-int stream_in2out_build(struct stream_in *in, struct stream_out *out)
-{
-	int ret;
-	int i;
-
-	for (i = 0; i < in->fmt_ctx->nb_streams; i++)
+	while (ptr < end)
 	{
-		//Create output AVStream according to input AVStream
-		if (in->fmt_ctx->streams[i]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
-			continue;
-
-		AVStream *in_stream = in->fmt_ctx->streams[i];
-		AVCodec *avcodec = avcodec_find_decoder(in_stream->codecpar->codec_id);
-		AVStream *out_stream = avformat_new_stream(out->ofmt_ctx, avcodec);
-		if (!out_stream)
+		if (ptr + 1 < end && *ptr == '\n' && *(ptr + 1) == '\n')
 		{
-			log_w("Stream", "Failed allocating output stream\n");
-			ret = AVERROR_UNKNOWN;
-			goto _err;
+			return ptr - buf + 2;
 		}
-
-		AVCodecContext *codec_ctx = avcodec_alloc_context3(avcodec);
-		ret = avcodec_parameters_to_context(codec_ctx, in_stream->codecpar);
-		if (ret < 0)
+		if (ptr + 2 < end && *ptr == '\n' && *(ptr + 1) == '\r' && *(ptr + 2) == '\n')
 		{
-			log_w("Stream",
-						"Failed to copy context from input to output stream codec context\n");
-			goto _err;
+			return ptr - buf + 3;
 		}
-
-		codec_ctx->codec_tag = 0;
-		if (out->ofmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
-			codec_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-
-		ret = avcodec_parameters_from_context(out_stream->codecpar, codec_ctx);
-	}
-
-	if (!(out->ofmt_ctx->flags & AVFMT_NOFILE))
-	{
-		ret = avio_open(&out->ofmt_ctx->pb, out->ofmt_ctx->url, AVIO_FLAG_WRITE);
-		if (ret < 0)
+		if (ptr + 2 < end && *ptr == '\r' && *(ptr + 1) == '\n' && *(ptr + 2) == '\n')
 		{
-			log_w("Stream", "Could not open output URL '%s'\n", out->ofmt_ctx->url);
-			goto _err;
+			return ptr - buf + 3;
 		}
+		if (ptr + 3 < end && *ptr == '\r' && *(ptr + 1) == '\n' && *(ptr + 2) == '\r' && *(ptr + 3) == '\n')
+		{
+			return ptr - buf + 4;
+		}
+		ptr++;
 	}
-	//Write file header
-	ret = avformat_write_header(out->ofmt_ctx, NULL);
-	if (ret < 0)
-	{
-		log_w("Stream", "Error occurred when opening output URL\n");
-		goto _err;
-	}
-
-	return 0;
-
-	_err:
 	return -1;
 }
 
-uint64_t os_time_ms()
+struct URLInfo
 {
-	struct timespec time =
-				{ 0, 0 };
-	clock_gettime(CLOCK_MONOTONIC, &time);
+	char prefix[10];
+	char host[30];
+	int port;
+	char useranme[30];
+	char password[30];
+	const char *path;
 
-	return (uint64_t) time.tv_sec * 1000 + (uint64_t) time.tv_nsec / 1000000;
+	int cseq;
+	char *Authenticate; //
+	char Authorization[300];
+};
+
+/***
+ v=0
+ o=- 2251938210 2251938210 IN IP4 0.0.0.0
+ s=Media Server
+ c=IN IP4 0.0.0.0
+ t=0 0
+ a=control:*
+ a=packetization-supported:DH
+ a=rtppayload-supported:DH
+ a=range:npt=now-
+ m=video 0 RTP/AVP 96
+ a=control:trackID=0
+ a=framerate:25.000000
+ a=rtpmap:96 H264/90000
+ a=fmtp:96 packetization-mode=1;profile-level-id=4D001F;sprop-parameter-sets=J00AH41oBQBbEAA=,KO4EYgA=
+ a=recvonly
+ m=application 0 RTP/AVP 107
+ a=control:trackID=4
+ a=rtpmap:107 vnd.onvif.metadata/90000
+ a=recvonly
+ =======================================================================
+ v=0
+ o=- 1604995310197096 1 IN IP4 192.168.0.88
+ s=profile1
+ u=http:///
+ e=admin@
+ t=0 0
+ a=control:*
+ a=range:npt=00.000-
+ m=video 0 RTP/AVP 96
+ b=AS:5000
+ a=control:track1
+ a=rtpmap:96 H264/90000
+ a=recvonly
+ a=fmtp:96 profile-level-id=674d00; sprop-parameter-sets=Z00AKpY1QPAET8s3AQEBAg==,aO4xsg==; packetization-mode=1
+ m=audio 0 RTP/AVP 8
+ b=AS:1000
+ a=control:track2
+ a=rtpmap:8 pcma/8000
+ a=ptime:40
+ a=recvonly
+ ***/
+struct SDPInfo
+{
+	//m=video 0 RTP/AVP 96
+	int media_video_port;
+	char media_video_proto[10];
+	int media_video_format;
+
+	//a=rtpmap:96 H264/90000
+	int media_video_attr_rtpmap_format;
+	char media_video_attr_rtpmap_type[10]; //H264
+	int media_video_attr_rtpmap_rate;	   //90000
+
+	//a=framerate:25.000000
+	int media_video_attr_framerate;
+
+	//a=control:trackID=0
+	char media_video_attr_control[20];
+
+	//sps 大小in sprop-parameter-sets
+	int width;
+	int height;
+};
+
+const char *string_readline(const char *str, char *linestr)
+{
+	const char *ptr = str;
+	while (*ptr && *ptr != '\n' && *ptr != '\r')
+		ptr++;
+	strncpy(linestr, str, ptr - str);
+	linestr[ptr - str] = 0;
+
+	if (*ptr == '\r' && *(ptr + 1) == '\n')
+		return ptr + 2;
+	if (*ptr == '\n')
+		return ptr + 1;
+	return ptr;
 }
 
-void h264_video_info(uint8_t *data, int size)
+//result:size=33
+void md5_gtstr(const char *string, char *result)
 {
-	// 读取SPS帧
-	// 读取PPS帧
-	// 解码SPS,获取视频图像宽、高信息
-	//databuff_out_hex((uint8_t*) data, size, stdout, 16 * 5);
-	int nal_head_pos = 0;
-	int nal_split_pos = 0;
-	int nal_len = 0;
-	uint8_t *ptr = data;
-	int len = size;
-	int ret = 0;
+	int i = 0;
+	unsigned char digest[16];
 
-	do
+	MD5_CTX context;
+	MD5_Init(&context);
+	MD5_Update(&context, string, strlen(string));
+	MD5_Final(digest, &context);
+
+	for (i = 0; i < 16; ++i)
 	{
-		nal_split_pos = H264_NALFindPos(ptr, len, &nal_head_pos, &nal_len);
-		if (nal_split_pos == -1)
-			break;
-		uint8_t type = ptr[nal_head_pos];
-		int forbidden_bit = (type & 0x80) >> 7;
-		int nal_reference_idc = (type & 0x60) >> 5;
-		int nal_unit_type = (type & 0x1F);
-
-		printf(">%d,NAL:(%02X) %d, %d, %d: len=%d\n", nal_head_pos,
-					ptr[nal_head_pos], forbidden_bit, nal_reference_idc, nal_unit_type, nal_len);
-
-		if (NALU_TYPE_SPS == nal_unit_type)
-		{
-			printf("SPS\n");
-			// 解码SPS,获取视频图像宽、高信息
-			log_print_hex(ptr + nal_head_pos, nal_len, stdout, nal_len);
-			h264_sps_parse(ptr + nal_head_pos, nal_len);
-		}
-		if (NALU_TYPE_PPS == nal_unit_type)
-		{
-			printf("PPS\n");
-		}
-		if (NALU_TYPE_IDR == nal_unit_type)
-		{
-			printf("IDR\n");
-		}
-		if (NALU_TYPE_SLICE == nal_unit_type)
-		{
-			printf("SLICE\n");
-		}
-		ptr += nal_head_pos + nal_len;
-		len -= nal_len + (nal_head_pos - nal_split_pos);
-	} while (1);
+		sprintf(&result[i * 2], "%02x", (unsigned int) digest[i]);
+	}
+	result[32] = 0;
 }
 
-void stream_in2out(struct stream_in *in, struct stream_out *out)
+void sdp_parse(const char *str, int len, struct SDPInfo *psdpinfo)
 {
-	int ret;
-	AVPacket inpkt;
-	av_init_packet(&inpkt);
-
-	int64_t start_time = av_gettime();
-	int64_t _dts = 0;
-	//PTS：显示时间戳，对应的数据格式为 AVFrame（解码后的帧），通过 AVCodecContext->time_base 获取。
-	//DTS：解码时间戳，对应的数据格式为AVPacket（解码前的包），通过AVStream->time_base获取。
-	while (1)
+	//每行读取
+	char linestr[200];
+	const char *ptr = str;
+	int media_desc = 0, media_video = -1;
+	while (*ptr)
 	{
-		AVStream *in_stream, *out_stream;
-		ret = av_read_frame(in->fmt_ctx, &in->pkt);
-		if (in->pkt.stream_index != in->video_index)
+		ptr = string_readline(ptr, linestr);
+		if (strncasecmp(linestr, "m=", 2) == 0)
+			media_desc++;
+		if (strncasecmp(linestr, "m=video ", strlen("m=video ")) == 0)
 		{
-			av_packet_unref(&in->pkt);
+			media_video = media_desc;
+			sscanf(linestr, "%*[^ ]%d %s %d", &psdpinfo->media_video_port,
+						psdpinfo->media_video_proto,
+						&psdpinfo->media_video_format);
 			continue;
 		}
-		printf("next... ");
-		h264_video_info(in->pkt.data, in->pkt.size);
-		in->video_frame_count++;
+		if (media_desc != media_video)
+			continue;
+		if (strncasecmp(linestr, "a=framerate:", strlen("a=framerate:")) == 0)
+			sscanf(linestr, "%*[^:]:%d", &psdpinfo->media_video_attr_framerate);
+		if (strncasecmp(linestr, "a=control:", strlen("a=control:")) == 0)
+			sscanf(linestr, "%*[^:]:%s", psdpinfo->media_video_attr_control);
+
+		if (strncasecmp(linestr, "a=rtpmap:", strlen("a=rtpmap:")) == 0)
 		{
-			in_stream = in->fmt_ctx->streams[in->pkt.stream_index];
-			out_stream = out->ofmt_ctx->streams[in->pkt.stream_index];
-#if 0
-			if (in->pkt.stream_index == in->video_index)
-			{
-				AVRational time_base = in_stream->time_base;
-				AVRational time_base_q =
-				{	1, AV_TIME_BASE};
-				int64_t pts_time = av_rescale_q(in->pkt.dts, time_base, time_base_q);
-				int64_t now_time = av_gettime() - start_time;
-				if (pts_time > now_time)
-				av_usleep(pts_time - now_time);
-			}
-
-			//转换PTS/DTS（Convert PTS/DTS）
-			in->pkt.pts = av_rescale_q_rnd(in->pkt.pts, in_stream->time_base, out_stream->time_base,
-						(enum AVRounding) (AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-			in->pkt.dts = av_rescale_q_rnd(in->pkt.dts, in_stream->time_base, out_stream->time_base,
-						(enum AVRounding) (AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
-			in->pkt.duration = av_rescale_q(in->pkt.duration, in_stream->time_base, out_stream->time_base);
-			in->pkt.pos = -1;
-
-			if (_dts == 0)
-			_dts = in->pkt.dts;
-
-			printf("pts: %ld dts: %ld \n", in->pkt.pts, in->pkt.dts);
-			if (in->pkt.dts < _dts)
-			{
-				printf("pkt.dts< dts:  %lu < %lu\n", in->pkt.dts, _dts);
-				//continue;
-			}
-			_dts = in->pkt.dts;
-#else
-			in->pkt.pts = _dts; //pts反映帧什么时候开始显示
-			in->pkt.dts = _dts; //dts反映数据流什么时候开始解码
-			in->pkt.duration = av_rescale_q(in->pkt.duration, in_stream->time_base, out_stream->time_base);
-			in->pkt.pos = -1;
-			_dts = _dts + 1000 / 25;
-			printf("pts: %ld dts: %ld duration:%lu\n", in->pkt.pts, in->pkt.dts, in->pkt.duration);
-#endif
+			sscanf(linestr, "%*[^:]:%d %[^/]/%d", &psdpinfo->media_video_attr_rtpmap_format,
+						psdpinfo->media_video_attr_rtpmap_type,
+						&psdpinfo->media_video_attr_rtpmap_rate);
 		}
-		ret = av_interleaved_write_frame(out->ofmt_ctx, &in->pkt);
-		if (ret < 0)
+		if (strncasecmp(linestr, "a=fmtp:", strlen("a=fmtp:")) == 0)
 		{
-			fprintf(stderr, "发送数据包出错, %s\n", av_err2str(ret));
-			av_packet_unref(&in->pkt);
-			break;
+			//sprop-parameter-sets 取 sps
+			char *ptr = linestr;
+			char *ptmp = NULL;
+			char *sps_base64 = NULL;
+			char *sps_b64_1 = NULL;
+			char *sps_b64_2 = NULL;
+			while (NULL != (ptr = strtok_r(ptr, ";", &ptmp)))
+			{
+				while (*ptr == ' ')
+					ptr++;
+
+				if (strncasecmp(ptr, "sprop-parameter-sets", strlen("sprop-parameter-sets")) == 0)
+				{
+					sps_base64 = ptr + strlen("sprop-parameter-sets");
+					while (*sps_base64 == ' ' || *sps_base64 == '=')
+						sps_base64++;
+					sps_b64_1 = sps_base64;
+					sps_b64_2 = strchr(sps_b64_1, ',');
+					if (sps_b64_2 && *sps_b64_2 == ',')
+					{
+						sps_b64_2++;
+					}
+					unsigned char out[BASE64_DECODE_OUT_SIZE(strlen(sps_b64_1))];
+					//解码
+					int outlen = base64_decode(sps_b64_1, strlen(sps_b64_1), out);
+					int width = 0, height = 0, fps = 0;
+					h264_decode_sps(out, outlen, &width, &height, &fps);
+					//printf("[%dx%d]\n", width, height);
+					psdpinfo->width = width;
+					psdpinfo->height = height;
+				}
+				ptr = NULL;
+			}
 		}
-		av_packet_unref(&in->pkt);
+		//printf("sdp parline:%s\n", linestr);
 	}
-	av_write_trailer(out->ofmt_ctx);
+
+	printf("m=video [%d] [%s] [%d]\n", psdpinfo->media_video_port,
+				psdpinfo->media_video_proto,
+				psdpinfo->media_video_format);
+	printf("fps=%d, control:%s\n", psdpinfo->media_video_attr_framerate, psdpinfo->media_video_attr_control);
+	printf("rtpmap:%d %s/%d\n", psdpinfo->media_video_attr_rtpmap_format,
+				psdpinfo->media_video_attr_rtpmap_type,
+				psdpinfo->media_video_attr_rtpmap_rate);
+	printf("wh: %dx%d\n", psdpinfo->width, psdpinfo->height);
 }
 
-void startPush(const char *uri_in, const char *uri_out)
+typedef struct _RTSPClient
 {
-	struct stream_in in;
-	struct stream_out out;
+	char *url;
+	int fd;
+	struct URLInfo urlinfo;
+	struct SDPInfo sdpinfo;
+
+	char UserAgent[30];
+} RTSPClient;
+
+int urldecode(const char *url, struct URLInfo *urlinfo)
+{
+	const char *ptr = url, *pos;
+	const char *pend;
+	int len = strlen(url);
+	int flagauth = 0;
+
+	ptr = strstr(url, "://");
+	if (ptr == NULL)
+		return -1;
+	ptr += 3;
+	strncpy(urlinfo->prefix, url, ptr - url);
+
+	pend = strchr(ptr, '/');
+	if (pend == NULL)
+		pend = url + len;
+	//寻找  username:password@host:port
+
+	const char *pname_end = strchr(ptr, ':');
+	const char *phost_begin;
+
+	for (phost_begin = pend; phost_begin > ptr; phost_begin--)
+	{
+		if (*phost_begin == '@')
+			break;
+	}
+
+	if (*phost_begin == '@' && pname_end < pend)
+	{
+		flagauth = 1;
+		strncpy(urlinfo->useranme, ptr, pname_end - ptr);
+		ptr = pname_end + 1;
+		strncpy(urlinfo->password, ptr, phost_begin - ptr);
+		ptr = phost_begin + 1;
+	}
+	//
+	if (ptr >= pend)
+	{
+		printf("[%s]unknow host port\n", url);
+		return -1;
+	}
+	//host and port;
+	for (pos = ptr; pos < pend; pos++)
+		if (*pos == ':')
+			break;
+	strncpy(urlinfo->host, ptr, pos - ptr);
+	if (*pos == ':')
+		ptr = pos + 1;
+	else
+		ptr = pos;
+
+	if (ptr < pend)
+	{
+		urlinfo->port = atoi(ptr);
+		ptr = pend;
+	}
+	else
+	{
+		if (strcmp(urlinfo->prefix, "http://") == 0)
+			urlinfo->port = 80;
+		if (strcmp(urlinfo->prefix, "https://") == 0)
+			urlinfo->port = 443;
+	}
+	urlinfo->path = ptr;
+
+#if DEBUG
+	printf("prefix:[%s]\n", urlinfo->prefix);
+	printf("useranme:[%s]\n", urlinfo->useranme);
+	printf("password:[%s]\n", urlinfo->password);
+	printf("host:[%s]\n", urlinfo->host);
+	printf("port:[%d]\n", urlinfo->port);
+	printf("path %s\n", urlinfo->path);
+#endif
+	return 0;
+}
+
+int socket_tcp(const char *host, int port)
+{
 	int ret;
+	int fd = socket(AF_INET, SOCK_STREAM, 0);
+	struct sockaddr_in in;
 
 	memset(&in, 0, sizeof(in));
-	memset(&out, 0, sizeof(out));
-
-	ret = stream_in_open(&in, uri_in);
+	in.sin_family = AF_INET;
+	in.sin_port = htons(port);
+	ret = inet_pton(AF_INET, host, &in.sin_addr.s_addr);
 	if (ret < 0)
 	{
-		log_e("Stream", "not open input url:%s, ret=%d\n", uri_in, ret);
-		goto _quit;
+		fprintf(stderr, "host not ipaddress [%s]\n", host);
+		goto _err;
 	}
 
-	av_dump_format(in.fmt_ctx, 0, in.fmt_ctx->url, 0);
-	ret = stream_out_open(&out, uri_out);
-	if (ret < 0)
+	ret = connect(fd, (struct sockaddr *) &in, sizeof(in));
+	if (ret != 0)
 	{
-		log_e("Stream", "not open out url:%s\n", uri_out);
-		goto _quit;
+		fprintf(stderr, "not connect ot host [%s], %s\n", host, strerror(errno));
+		goto _err;
 	}
+	return fd;
 
-	ret = stream_in2out_build(&in, &out);
-	if (ret < 0)
-	{
-		log_e("Stream", "not open out url:%s\n", uri_out);
-		goto _quit;
-	}
-
-	log_i("Stream", "start push ...\n");
-
-	av_dump_format(out.ofmt_ctx, 0, out.ofmt_ctx->url, 1);
-	stream_in2out(&in, &out);
-
-	_quit:
-
-	stream_in_close(&in);
-	stream_out_close(&out);
+	_err:
+	if (fd != -1)
+		close(fd);
+	return -1;
 }
 
-#include <sys/socket.h>
-#include <arpa/inet.h>
-
-//return 0 success; !0 error;
-int ToolIPV4MaskAddressStringCheck(const char *value)
+int socket_send_text(int fd, const char *buf)
 {
-	struct in_addr addr;
+	printf(">%s", buf);
+	int len = strlen(buf);
 	int ret;
-	memset(&addr, 0, sizeof(addr));
-	ret = inet_pton(AF_INET, value, &addr);
-	if (ret <= 0)
-		ret = -1;
-	//printf("ret=%d %s, addr:%X\n", ret, value, htonl(addr.s_addr));
-	if (ret == 1)
+	int pos = 0;
+	int slen = 0;
+	while (pos < len)
 	{
-		addr.s_addr = htonl(addr.s_addr);
-		in_addr_t b = ~addr.s_addr + 1;
-		if ((b & (b - 1)) == 0)
-			return 0;
+		ret = send(fd, buf + pos, len - pos, 0);
+		if (ret > 0)
+			pos += ret;
+		if (ret <= 0)
+		{
+			if (ret < 0 && (errno == EAGAIN))
+				continue;
+			return -1;
+		}
+	}
+	return pos;
+}
+
+int socket_recv_text(int fd, char *buf, int len)
+{
+	return recv(fd, buf, len, 0);
+}
+
+int rtsp_response_recv(int fd, char **text, size_t *textlen)
+{
+	struct pollfd pofd;
+	int ret;
+
+	memset(&pofd, 0, sizeof(pofd));
+	pofd.fd = fd;
+	pofd.events = POLLIN;
+
+	char *membuf = NULL;
+	size_t memlen = 0;
+
+	FILE *fp = open_memstream(&membuf, &memlen);
+	char buff[1024];
+	int content_length = 0;
+	int head_lenght = -1;
+
+	while (1)
+	{
+		ret = poll(&pofd, 1, 100);
+		if (ret == 0)
+			continue;
+		if (ret > 0)
+		{
+			if (POLLIN == (pofd.revents & POLLIN))
+			{
+				ret = recv(fd, buff, sizeof(buff), 0);
+				if (ret <= 0)
+				{
+					if (ret < 0 && (errno == EAGAIN || errno == EINTR))
+						continue;
+					break;
+				}
+				if (ret > 0)
+				{
+					fwrite(buff, 1, ret, fp);
+					fflush(fp);
+					//printf("membuf:%s, %d\n", membuf, memlen);
+				}
+
+				if (head_lenght == -1)
+				{
+					head_lenght = string_http_heard_getlength(membuf, memlen);
+					if (head_lenght != -1)
+						content_length = string_http_head_get_content_length(membuf, head_lenght);
+					if (content_length == -1)
+						content_length = 0;
+				}
+
+				if (head_lenght != -1)
+				{
+					if (content_length + head_lenght == memlen)
+						break;
+				}
+			}
+		}
+	}
+	buff[0] = 0;
+	fwrite(buff, 1, 1, fp);
+	fflush(fp);
+	fclose(fp);
+
+	if (memlen == 0)
+	{
+		if (membuf != NULL)
+		{
+			free(membuf);
+			membuf = NULL;
+		}
+	}
+
+#if DEBUG
+	printf("================\n%s\n=============\n", membuf);
+#endif
+
+	if (memlen > 0)
+	{
+		char pref[10];
+		int code = -1;
+		if (2 == sscanf(membuf, "%[^ ] %d ", pref, &code))
+		{
+			*text = membuf;
+			*textlen = memlen;
+			return code;
+		}
+		else
+		{
+			if (membuf != NULL)
+				free(membuf);
+		}
+	}
+	return -1;
+}
+
+int rtsp_OPTIONS(RTSPClient *client)
+{
+	int ret;
+	char buff[1024];
+	char *ptr = buff;
+	struct URLInfo *urlinfo = &client->urlinfo;
+	ptr += sprintf(buff, "OPTIONS %s%s:%d%s RTSP/1.0\r\n", urlinfo->prefix, urlinfo->host, urlinfo->port, urlinfo->path);
+	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
+	ptr += sprintf(ptr, "\r\n");
+	ret = socket_send_text(client->fd, buff);
+	if (ret < 0)
 		return -1;
+	urlinfo->cseq++;
+
+	char *resp_text = NULL;
+	size_t resp_len = 0;
+	ret = rtsp_response_recv(client->fd, &resp_text, &resp_len);
+	char pref[10];
+	int code = 0;
+
+	if (resp_text)
+		sscanf(resp_text, "%[^ ] %d ", pref, &code);
+	else
+		code = -1;
+	if (resp_text)
+		free(resp_text);
+	return code;
+}
+
+int rtsp_DESCRIBE_base(RTSPClient *client)
+{
+	int ret;
+	char buff[1024];
+	char *ptr = buff;
+	int fd = client->fd;
+	struct URLInfo *urlinfo = &client->urlinfo;
+	struct SDPInfo *psdpinfo = &client->sdpinfo;
+
+	ptr += sprintf(buff, "DESCRIBE %s%s:%d%s RTSP/1.0\r\n", urlinfo->prefix, urlinfo->host, urlinfo->port, urlinfo->path);
+	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	if (strlen(urlinfo->Authorization) > 0)
+		ptr += sprintf(ptr, "%s", urlinfo->Authorization);
+	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
+	ptr += sprintf(ptr, "\r\n");
+	ret = socket_send_text(fd, buff);
+	if (ret < 0)
+		return -1;
+	urlinfo->cseq++;
+
+	char *resp_text = NULL;
+	size_t resp_len = 0;
+	ret = rtsp_response_recv(fd, &resp_text, &resp_len);
+
+	char pref[10];
+	int code = 0;
+
+	if (resp_text)
+		sscanf(resp_text, "%[^ ] %d ", pref, &code);
+	else
+		code = -1;
+
+	if (code == 401)
+	{
+		//需要加密发送哦
+		const char *auth = strstr(resp_text, "WWW-Authenticate:");
+		if (auth)
+		{
+			auth += strlen("WWW-Authenticate:");
+			if (*auth == ' ')
+				auth++;
+			char *next = strchr(auth, '\r');
+			if (next == NULL)
+				next = strchr(auth, '\n');
+			if (next)
+				*next = 0;
+
+			char *Authenticate = (char *) calloc(next - auth + 1, 1);
+			strcpy(Authenticate, auth);
+			if (urlinfo->Authenticate)
+				free(urlinfo->Authenticate);
+			urlinfo->Authenticate = Authenticate;
+		}
+	}
+
+	if (code == 200)
+	{
+		//需要得到 sdp内容
+		int head_len = string_http_heard_getlength(resp_text, strlen(resp_text));
+		int size = strlen(resp_text);
+		printf("--------SDP数据----------\n%s", resp_text + head_len);
+		//m: media descriptions
+		//a: attributes
+		sdp_parse(resp_text + head_len, size - head_len, psdpinfo);
+	}
+	if (resp_text)
+		free(resp_text);
+	return code;
+}
+
+void printstr_size(const char *ptr, int len)
+{
+	while (len)
+	{
+		putchar(*ptr++);
+		len--;
+	}
+	printf("\n");
+}
+
+//realm：表示Web服务器中受保护文档的安全域（比如公司财务信息域和公司员工信息域），用来指示需要哪个域的用户名和密码
+//qop：保护质量，包含auth（默认的）和auth-int（增加了报文完整性检测）两种策略，（可以为空，但是）不推荐为空值
+//nonce：服务端向客户端发送质询时附带的一个随机数，这个数会经常发生变化。客户端计算密码摘要时将其附加上去，使得多次生成同一用户的密码摘要各不相同，用来防止重放攻击
+//nc：nonce计数器，是一个16进制的数值，表示同一nonce下客户端发送出请求的数量。例如，在响应的第一个请求中，客户端将发送“nc=00000001”。这个指示值的目的是让服务器保持这个计数器的一个副本，以便检测重复的请求
+//cnonce：客户端随机数，这是一个不透明的字符串值，由客户端提供，并且客户端和服务器都会使用，以避免用明文文本。这使得双方都可以查验对方的身份，并对消息的完整性提供一些保护
+//response：这是由用户代理软件计算出的一个字符串，以证明用户知道口令
+//Authorization-Info：用于返回一些与授权会话相关的附加信息
+//nextnonce：下一个服务端随机数，使客户端可以预先发送正确的摘要
+//rspauth：响应摘要，用于客户端对服务端进行认证
+//stale：当密码摘要使用的随机数过期时，服务器可以返回一个附带有新随机数的401响应，并指定stale=true，表示服务器在告知客户端用新的随机数来重试，而不再要求用户重新输入用户名和密码了
+void digest_calc(struct URLInfo *urlinfo, const char *requestcmd, const char *uri)
+{
+	//WWW-Authenticate: Digest realm="RTSP SERVER", nonce="8f41543422d38188e383815983a30377", stale="FALSE"
+	//Authorization: Digest username="admin", realm="RTSP SERVER", nonce="8f41543422d38188e383815983a30377", uri="rtsp://192.168.0.88:554/profile1", response="519bd2f50627f890ca0e6c8c1a69a95a"
+	printf("digest: [%s]\n", urlinfo->Authenticate);
+	const char *ptr = urlinfo->Authenticate;
+	int authlen = strlen(urlinfo->Authenticate);
+	const char *pend = ptr + authlen;
+	const char *psplit = NULL;
+
+	ptr = strstr(ptr, "Digest");
+	if (ptr)
+		ptr += strlen("Digest") + 1;
+
+	const char *pname = NULL;
+	const char *pvalue = NULL;
+
+	char realm_str[100];
+	char nonce_str[33];
+	char stale_str[10];
+
+	memset(realm_str, 0, sizeof(realm_str));
+	memset(nonce_str, 0, sizeof(nonce_str));
+	memset(stale_str, 0, sizeof(stale_str));
+
+	while (*ptr)
+	{
+		if (pname == NULL)
+			pname = ptr;
+
+		if (pname && *ptr == '=')
+		{
+			int name_len = ptr - pname;
+			ptr++;
+			while (*ptr && *ptr != '\r' && *ptr != '\n' && *ptr == ' ')
+				ptr++;
+			pvalue = ptr;
+
+			int pvalue_len = 0;
+			if (*pvalue == '\"')
+			{
+				ptr++;
+				pvalue++;
+				while (*ptr && *ptr != '\r' && *ptr != '\n' && *ptr != '\"') //寻找下一个"
+					ptr++;
+				pvalue_len = ptr - pvalue;
+			}
+			//, 或 \r\n 或 \0结尾
+			while (*ptr && *ptr != '\r' && *ptr != '\n' && *ptr != ',')
+				ptr++;
+			//value
+			if (pvalue_len == 0)
+				pvalue_len = ptr - pvalue;
+			while (*ptr && *ptr != '\r' && *ptr != '\n' && (*ptr == ',' || *ptr == ' '))
+				ptr++;
+
+			printf("name=");
+			printstr_size(pname, name_len);
+			printf("value=");
+			printstr_size(pvalue, pvalue_len);
+
+			if (strncasecmp(pname, "realm=", strlen("realm=")) == 0)
+				strncpy(realm_str, pvalue, pvalue_len);
+			if (strncasecmp(pname, "nonce=", strlen("nonce=")) == 0)
+				strncpy(nonce_str, pvalue, pvalue_len);
+			if (strncasecmp(pname, "stale=", strlen("stale=")) == 0)
+				strncpy(stale_str, pvalue, pvalue_len);
+
+			pvalue = NULL;
+			pname = NULL;
+			continue;
+		}
+		ptr++;
+	}
+	//需要进行md5加密
+	//	算法	A1
+	//	MD5（默认）	<username>:<realm>:<password>
+	//	MD5-sess(algorithm=“md5-sess”)	MD5(<username>:<realm>:<password>):<nonce>:<cnonce>
+	//
+	char A1Str[300];
+	char A1Md5_def[33];
+
+	sprintf(A1Str, "%s:%s:%s", urlinfo->useranme, realm_str, urlinfo->password);
+	md5_gtstr(A1Str, A1Md5_def);
+	printf("A1:%s\n", A1Str);
+	printf("A1Md5_def:%s\n", A1Md5_def);
+
+	char *nc = "";
+	char *cnonce = "";
+	char *qop = "";
+
+	//如果qop有值(if (*pszQop))，则	HD=nonce:noncecount:cnonce:qop
+	//否则HD=nonce
+
+	/// The “response” field is computed as:
+	// md5(md5(<username>:<realm>:<password>):<nonce>:md5(<cmd>:<url>))
+	// or, if “fPasswordIsMD5” is True:
+	// md5(<password>:<nonce>:md5(<cmd>:<url>))
+
+	char A2Str[300];
+	char A2md5[33];							  // "rtsp://192.168.0.88:554/profile1"
+	sprintf(A2Str, "%s:%s", requestcmd, uri); //DESCRIBE
+	md5_gtstr(A2Str, A2md5);
+
+	char md5src[300];
+	sprintf(md5src, "%s:%s:%s", A1Md5_def, nonce_str, A2md5);
+
+	char response[33];
+	md5_gtstr(md5src, response);
+	printf("A2Str=%s, md5str=%s\n", A2Str, response);
+
+	sprintf(urlinfo->Authorization, "Authorization: Digest username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", response=\"%s\"\r\n",
+				urlinfo->useranme, realm_str, nonce_str, uri,
+				response);
+}
+
+int rtsp_DESCRIBE(RTSPClient *client)
+{
+	int ret;
+	ret = rtsp_DESCRIBE_base(client);
+	if (ret == 401 && client->urlinfo.Authenticate)
+	{
+		if (strncmp(client->urlinfo.Authenticate, "Basic ", 6) == 0)
+		{
+			char pwd[100];
+			char base64str[200];
+			snprintf(pwd, sizeof(pwd), "%s:%s", client->urlinfo.useranme, client->urlinfo.password);
+			base64_encode(pwd, strlen(pwd), base64str);
+			sprintf(client->urlinfo.Authorization, "Authorization: Basic %s\r\n", base64str);
+		}
+		if (strncasecmp(client->urlinfo.Authenticate, "Digest ", strlen("Digest ")) == 0)
+		{
+			char uri[200];
+			sprintf(uri, "%s%s:%d%s", client->urlinfo.prefix,
+						client->urlinfo.host,
+						client->urlinfo.port,
+						client->urlinfo.path);
+			digest_calc(&client->urlinfo, "DESCRIBE", uri);
+		}
+		ret = rtsp_DESCRIBE_base(client);
+		if (ret == 401)
+			return 401;
 	}
 	return ret;
 }
 
-int ToolIP4AndMaskCheck(const char *ipstr, const char *maskstr)
+//客户端提醒服务器建立会话,并确定传输模式:
+int rtsp_SETUP(RTSPClient *client, int sessionid)
 {
+	char headstr[1024];
+	char *ptr = headstr;
+	struct URLInfo *urlinfo = &client->urlinfo;
 	int ret;
-	//struct in_addr addr_ip;
-	//struct in_addr addr_mask;
-	union ipv4
+
+	ptr += sprintf(ptr, "SETUP %s%s:%d%s/%s RTSP/1.0\r\n",
+				urlinfo->prefix, urlinfo->host,
+				urlinfo->port,
+				urlinfo->path,
+				client->sdpinfo.media_video_attr_control);
+	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n");
+	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
+	ptr += sprintf(ptr, "x-Dynamic-Rate: 0\r\n");
+	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
+	ptr += sprintf(ptr, "Session: %d\r\n", sessionid);
+	if (strlen(urlinfo->Authorization) > 0)
 	{
-		uint8_t v[4];
-		in_addr_t s_addr;
-	};
+		if (strncasecmp(client->urlinfo.Authenticate, "Digest ", strlen("Digest ")) == 0)
+		{
+			char uri[200];
+			sprintf(uri, "%s%s:%d%s/", client->urlinfo.prefix,
+						client->urlinfo.host,
+						client->urlinfo.port,
+						client->urlinfo.path);
+			digest_calc(&client->urlinfo, "SETUP", uri);
+		}
+		ptr += sprintf(ptr, "%s", urlinfo->Authorization);
+	}
+	ptr += sprintf(ptr, "\r\n");
 
-	union ipv4 addr_ip;
-	union ipv4 addr_mask;
-
-	ret = inet_pton(AF_INET, ipstr, &addr_ip);
-	if (ret != 1)
+	ret = socket_send_text(client->fd, headstr);
+	if (ret < 0)
 		return -1;
 
-	ret = inet_pton(AF_INET, maskstr, &addr_mask);
-	if (ret != 1)
-		return -1;
-
-	if (addr_ip.v[0] == 127 || addr_ip.v[0] == 0 || addr_ip.v[0] == 255)
-		return -1;
-
-	ret = ToolIPV4MaskAddressStringCheck(maskstr);
-	if (ret == -1)
-		return -1;
-
-	printf("%d.%d.%d.%d %d.%d.%d.%d\n", addr_ip.v[0], addr_ip.v[1], addr_ip.v[2], addr_ip.v[3],
-				addr_mask.v[0], addr_mask.v[1], addr_mask.v[2], addr_mask.v[3]
-				);
-	uint32_t _mask = htonl(addr_mask.s_addr);
-	uint32_t _ip = htonl(addr_ip.s_addr);
-	uint32_t _ip_number = _ip & ~(_ip & _mask);  //去子网网段的ip数字
-	uint32_t _mask_number_max = ~_mask;  //子网最大数量
-
-	if (_ip_number == 0 || _ip_number >= _mask_number_max)
-		return -1;
-
-	return 0;
+	char *response_text = NULL;
+	size_t textlen = 0;
+	char pref[10];
+	ret = rtsp_response_recv(client->fd, &response_text, &textlen);
+	if (response_text)
+	{
+		free(response_text);
+	}
+	if (ret == 200)
+		return 200;
+	return ret;
 }
 
-void Onvif_Tets(const char *ip, const char *user, const char *pass)
+int rtsp_PLAY(RTSPClient *client, int sessionid)
 {
-	struct OnvifDeviceInfo onvifInfo;
+	char headstr[1024];
+	char *ptr = headstr;
+	struct URLInfo *urlinfo = &client->urlinfo;
 	int ret;
-	memset(&onvifInfo, 0, sizeof(onvifInfo));
-	ret = OnvifDeviceInfo_Get(ip, user, pass, &onvifInfo);
+
+	ptr += sprintf(ptr, "PLAY %s%s:%d%s RTSP/1.0\r\n",
+				urlinfo->prefix, urlinfo->host,
+				urlinfo->port,
+				urlinfo->path);
+	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n");
+	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
+	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
+	ptr += sprintf(ptr, "Session: %d\r\n", sessionid);
+	ptr += sprintf(ptr, "Range: npt=0.000-\r\n");
+
+	if (strlen(urlinfo->Authorization) > 0)
+	{
+		if (strncasecmp(client->urlinfo.Authenticate, "Digest ", strlen("Digest ")) == 0)
+		{
+			char uri[200];
+			sprintf(uri, "%s%s:%d%s/", client->urlinfo.prefix,
+						client->urlinfo.host,
+						client->urlinfo.port,
+						client->urlinfo.path);
+			digest_calc(&client->urlinfo, "PLAY", uri);
+		}
+		ptr += sprintf(ptr, "%s", urlinfo->Authorization);
+	}
+	ptr += sprintf(ptr, "\r\n");
+
+	ret = socket_send_text(client->fd, headstr);
+	if (ret < 0)
+		return -1;
+
+	char *response_text = NULL;
+	size_t textlen = 0;
+	char pref[10];
+	ret = rtsp_response_recv(client->fd, &response_text, &textlen);
+	if (response_text)
+	{
+		free(response_text);
+	}
+	if (ret == 200)
+		return 200;
+	return ret;
+}
+
+RTSPClient *RTSPClient_open(const char *url)
+{
+	RTSPClient *client = (RTSPClient *) calloc(sizeof(RTSPClient), 1);
+	if (client == NULL)
+		return NULL;
+	strcpy(client->UserAgent, "CJRTSPClientV1.0");
+	client->url = strdup(url);
+	urldecode(client->url, &client->urlinfo);
+	int ret;
+	int fd = socket_tcp(client->urlinfo.host, client->urlinfo.port);
+	if (fd == -1)
+	{
+		free(client->url);
+		free(client);
+		return NULL;
+	}
+	printf("connect success %d,[%s]\n", fd, client->urlinfo.host);
+	client->fd = fd;
+	ret = rtsp_OPTIONS(client);
+	ret = rtsp_DESCRIBE(client);
 	if (ret != 200)
+		goto _err;
+	ret = rtsp_SETUP(client, 10001);
+	if (ret != 200)
+		goto _err;
+	ret = rtsp_PLAY(client, 10001);
+	if (ret != 200)
+		goto _err;
+	return client;
+
+	_err:
+	close(client->fd);
+	if (client->urlinfo.Authenticate)
+		free(client->urlinfo.Authenticate);
+	free(client->url);
+	free(client);
+	return NULL;
+}
+
+/**
+ * 5.1 RTP Fixed Header Fields
+ *
+ *   0                   1                   2                   3
+ *   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *  |V=2|P|X|  CC   |M|     PT      |       sequence number         |
+ *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *  |                           timestamp                           |
+ *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *  |           synchronization source (SSRC) identifier            |
+ *  +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+ *  |            contributing source (CSRC) identifiers             |
+ *  |                             ....                              |
+ *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *
+ *  version (V): 2 bits
+ *  padding (P): 1 bit
+ *  extension (X): 1 bit
+ *  CSRC count (CC): 4 bits
+ *  marker (M): 1 bit
+ *  payload type (PT): 7 bits
+ *  sequence number: 16 bits
+ *  timestamp: 32 bits
+ *  SSRC: 32 bits
+ *  CSRC list: 0 to 15 items, 32 bits each
+ *
+ */
+struct rtp_pkt_header
+{
+	union
 	{
-		printf("error.....\n");
-		return;
-	}
-	printf("Manufacturer:[%s]\n", onvifInfo.devInfo.Manufacturer);
-	printf("mediaUrl:%s\n", onvifInfo.mediaUrl);
-	for (int i = 0; i < 3; i++)
+		uint16_t flags;
+		struct info
+		{
+			//X86
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+			uint8_t CC :4;
+			uint8_t x :1;
+			uint8_t p :1;
+			uint8_t v :2;
+
+			///
+			uint8_t PT :7;
+			uint8_t M :1;
+#endif
+		} info;
+	} _base;
+	uint16_t seqnum;
+	uint32_t timestamp;
+	uint32_t ssrc;
+}__attribute__((packed));
+
+/*
+ +---------------+
+ |0|1|2|3|4|5|6|7|
+ +-+-+-+-+-+-+-+-+
+ |F|NRI|  Type   |
+ +---------------+
+ */
+typedef struct
+{
+	//byte 0
+	unsigned char TYPE :5;
+	unsigned char NRI :2;
+	unsigned char F :1;
+} NALU_HEADER; // 1 BYTE
+
+/*
+ +---------------+
+ |0|1|2|3|4|5|6|7|
+ +-+-+-+-+-+-+-+-+
+ |F|NRI|  Type   |
+ +---------------+
+ */
+typedef struct
+{
+	//byte 0
+	unsigned char TYPE :5;
+	unsigned char NRI :2;
+	unsigned char F :1;
+} FU_INDICATOR; // 1 BYTE
+
+/*
+ +---------------+
+ |0|1|2|3|4|5|6|7|
+ +-+-+-+-+-+-+-+-+
+ |S|E|R|  Type   |
+ +---------------+
+ */
+typedef struct
+{
+	//byte 0
+	unsigned char TYPE :5;
+	unsigned char R :1;
+	unsigned char E :1;
+	unsigned char S :1;
+} FU_HEADER;   // 1 BYTES
+
+int RTSPStream_Recv(RTSPClient *client)
+{
+	//与SETUP有关
+	//RTP和RTCP数据会以$符号＋1个字节的通道编号＋2个字节的数据长度，共4个字节的前缀开始
+	//	| magic number | channel number | data length | data  |magic number -
+	//	magic number：   RTP数据标识符，"$" 一个字节
+	//	channel number： 信道数字 - 1个字节，用来指示信道
+	//	data length ：   数据长度 - 2个字节，用来指示插入数据长度
+	//	data ：          数据 - ，比如说RTP包，总长度与上面的数据长度相同
+	struct pollfd pofds;
+	int ret;
+
+	unsigned char buff[1024 * 50];
+
+	int magic;
+	int channel;
+	int len;
+
+	int pos = 0;
+
+	FILE *fp = fopen("test.h264", "wb");
+
+	while (1)
 	{
-		if (strlen(onvifInfo.uri[i]) == 0)
-			break;
-		printf("url:[%s]\n", onvifInfo.uri[i]);
+		memset(&pofds, 0, sizeof(pofds));
+		pofds.fd = client->fd;
+		pofds.events = POLLIN;
+		ret = poll(&pofds, 1, 100);
+		if (ret > 0)
+		{
+			ret = recv(client->fd, buff, 4, 0);
+			if (ret == 4)
+			{
+				if (buff[0] == '$')
+				{
+					channel = buff[1];
+					memcpy(&len, buff + 2, 2);
+					len = ntohs(len);
+					printf("RTSP Interleavel Frame: %d %d %d\n", magic, channel, len);
+					//再接收len字节
+
+					pos = 0;
+					while (pos < len)
+					{
+						ret = recv(client->fd, buff + pos, len - pos, 0);
+						if (ret > 0)
+						{
+							pos += ret;
+						}
+					}
+
+					if (pos == len) //RTP 头
+					{
+						struct rtp_pkt_header rtp_hdr;
+						memcpy(&rtp_hdr, buff, sizeof(rtp_hdr));
+						printf("V=%d ", rtp_hdr._base.info.v);
+						printf("PT=%d ", rtp_hdr._base.info.PT);
+						printf("seq:%u ", rtp_hdr.seqnum);
+						printf("timestamp:%u ", rtp_hdr.timestamp);
+						printf("ssrc:%u\n", rtp_hdr.ssrc);
+						//exit(0);
+						if (rtp_hdr._base.info.PT == 96)
+						{ //H264
+
+						}
+						//如果UALU数据＜1500（自己设定），使用单一包发送：
+						//如果NALU数据＞1500，使用分片发送：（分三种情况设备：第一次RTP，中间的RTP，最后一次RTP）
+
+						uint8_t *h264_packet = buff + sizeof(rtp_hdr);
+						NALU_HEADER *nalu_hdr = NULL;
+						nalu_hdr = (NALU_HEADER*) &buff[12];
+
+						static char nal[4] =
+									{ 00, 00, 00, 01 };
+
+						if (nalu_hdr->TYPE > 0 && nalu_hdr->TYPE < 24)  //单包
+						{
+							fwrite(nal, 4, 1, fp);
+							fwrite(h264_packet, 1, len - sizeof(rtp_hdr), fp);
+						}
+						else if (nalu_hdr->TYPE == 24)  //STAP-A   单一时间的组合包
+						{
+
+						}
+						else if (nalu_hdr->TYPE == 28)                    //FU-A分片包，解码顺序和传输顺序相同
+						{
+							FU_INDICATOR *fu_ind = (FU_INDICATOR *) &buff[12];
+							FU_HEADER *fu_hdr = (FU_HEADER *) &buff[13];
+							printf("FU_INDICATOR->F     :%d\n", fu_ind->F);
+							printf("FU_INDICATOR->NRI   :%d\n", fu_ind->NRI);
+							printf("FU_INDICATOR->TYPE  :%d\n", fu_ind->TYPE);
+
+							printf("FU_HEADER->S        :%d\n", fu_hdr->S);
+							printf("FU_HEADER->E        :%d\n", fu_hdr->E);
+							printf("FU_HEADER->R        :%d\n", fu_hdr->R);
+							printf("FU_HEADER->TYPE     :%d\n", fu_hdr->TYPE);
+
+							if (rtp_hdr._base.info.M == 1) //分片包最后一个包
+							{
+								fwrite(buff + 14, 1, len - 14, fp); //写NAL数据
+							}
+							else
+							if (rtp_hdr._base.info.M == 0)  //分片包 但不是最后一个包
+							{
+								if (fu_hdr->S == 1)  //分片的第一个包
+								{
+									unsigned char F;
+									unsigned char NRI;
+									unsigned char TYPE;
+									unsigned char nh;
+
+									F = fu_ind->F << 7;
+									NRI = fu_ind->NRI << 5;
+									TYPE = fu_hdr->TYPE; //应用的是FU_HEADER的TYPE
+									//nh = n->forbidden_bit|n->nal_reference_idc|n->nal_unit_type;  //二进制文件也是按 大字节序存储
+									nh = F | NRI | TYPE;
+
+									printf("当前包为FU-A分片包第一个包\n");
+									//写NAL
+									fwrite(nal, 4, 1, fp);
+									fwrite(&nh, 1, 1, fp);									//写NAL HEADER
+									fwrite(buff + 14, 1, len - 14, fp); //写NAL数据
+								}
+								else   //如果不是第一个包
+								{
+									printf("当前包为FU-A分片包\n");
+									fwrite(buff + 14, len - 14, 1, fp);
+								}
+							}
+
+						}
+					}
+				}
+			}
+		}
 	}
-	printf("---------------------------------------------\n");
+}
+
+void urldecode_test(const char *url)
+{
+	struct URLInfo uinfo;
+	memset(&uinfo, 0, sizeof(uinfo));
+	printf("\nURL:%s\n", url);
+	urldecode(url, &uinfo);
 }
 
 int main(int argc, char **argv)
 {
-	int ch;
-	char uri_in[300];
-	char uri_out[300];
-	int ret;
-	char hname[100];
-//	gethostname(hname, sizeof(hname));
-//	printf("host:[%s]\n", hname);
-//	Onvif_Tets("192.168.0.9", "admin", "Dc123456"); //hk
-//	Onvif_Tets("192.168.0.150", "admin", "admin"); //dahua
-//	Onvif_Tets("192.168.0.212", "admin", "xbwl8888"); //hk
-//	Onvif_Tets("192.168.0.197", "admin", "admin123456"); //dahua
-//	Onvif_Tets("192.168.0.67", "admin", "admin"); //dahua
-//	Onvif_Tets("192.168.0.88", "admin", "123456"); //
-	//第一个整数不能为127（环回地址），不能为0和255
-	printf("%d\n", ToolIP4AndMaskCheck("192.168.1.2", "255.255.255.0"));
+	const char *url = "rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
 
-	memset(uri_in, 0, sizeof(uri_in));
-	memset(uri_out, 0, sizeof(uri_out));
+	url = "rtsp://admin:admin@192.168.0.88:554/profile1";
+//	urldecode_test(url);
+//	struct URLInfo urlinfo;
+//	memset(&urlinfo, 0, sizeof(urlinfo));
+//	strcpy(urlinfo.useranme, "admin");
+//	strcpy(urlinfo.password, "admin");
+//	urlinfo.Authenticate = "Digest aa=bb,realm=\"RTSP SERVER\", nonce=\"8f41543422d38188e383815983a30377\", stale=\"FALSE\"";
+//	digest_(&urlinfo);
+#if 0
+	urldecode_test("rtsp://admin:admin@11@192.168.0.150:554/paht1");
+	urldecode_test("rtsp://admin:@192.168.0.150:554/paht1");
+	urldecode_test("rtsp://192.168.0.150:554/paht1");
+	urldecode_test("rtsp://:554/paht1");
+	urldecode_test("rtsp:///paht1");
+	urldecode_test("http://www.baidu.com/paht1");
+#endif
+	struct rtp_pkt_header rtp;
+	uint8_t packet_bytes[] =
+				{
+							0x80, 0x60, 0xb2, 0x55, 0x35, 0xd9, 0xdc, 0xdd,
+							0x0b, 0xfe, 0x81, 0x7a, 0x67, 0x4d, 0x00, 0x2a,
+							0x96, 0x35, 0x40, 0xf0, 0x04, 0x4f, 0xcb, 0x37,
+							0x01, 0x01, 0x01, 0x02 };
 
-	while ((ch = getopt(argc, argv, "i:o:t:h")) != -1)
-	{
-		switch (ch)
-		{
-			case 'i':
-				strcpy(uri_in, optarg);
-			break;
-			case 'o':
-				strcpy(uri_out, optarg);
-			break;
-			case 'h':
-				printf("-i input file url\n");
-				printf("-o out file url\n");
-				return 0;
-			break;
-			case 'v':
-				printf("%s %s\n", __DATE__, __TIME__);
-			break;
-			default:
-				break;
-		}
-	}
+	memcpy(&rtp, packet_bytes, sizeof(rtp));
+	printf("V=%d ", rtp._base.info.v);
+	printf("PT=%d ", rtp._base.info.PT);
+	printf("seq:%u ", rtp.seqnum);
+	printf("timestamp:%u ", rtp.timestamp);
+	printf("ssrc:%u\n", rtp.ssrc);
+//	exit(1);
 
-	//rtsp://admin@admin:192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
-	char *url_in =
-				"rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
-	//url_in = "rtsp://admin:admin@192.168.0.88:554/profile1";
-	url_in = "rtsp://192.168.0.12:8880/hg_base.h264";
-
-	char *url_out = "rtmp://127.0.0.1:1985/live/test";
-
-	//url_out = "rtmp://oms.lxvision.com:2935/test/test1";
-	int librtmp_test(const char *url_in, const char *url_out);
-	//librtmp_test(url_in, url_out);
-	startPush(url_in, url_out);
-	return 0;
-}
-
-/**
- * 发送RTMP数据包
- *
- * @param nPacketType 数据类型
- * @param data 存储数据内容
- * @param size 数据大小
- * @param nTimestamp 当前包的时间戳
- *
- * @成功则返回 1 , 失败则返回一个小于0的数
- */
-struct media_data
-{
-	char *pps;
-	char *sps;
-	int pps_len;
-	int sps_len;
-};
-
-int nTimeStamp = 0;
-
-// error while decoding MB 29 44, bytestream -70
-int h264buff_send(RTMP *rtmp, struct media_data *mdata, int isiframe, uint8_t *data, int size)
-{
-// 读取SPS帧
-// 读取PPS帧
-// 解码SPS,获取视频图像宽、高信息
-	//databuff_out_hex((uint8_t*) data, size, stdout, 16 * 5);
-
-	int nal_head_pos = 0;
-	int nal_split_pos = 0;
-	int nal_len = 0;
-	uint8_t *ptr = data;
-	int len = size;
-	int ret = 0;
-
-	do
-	{
-		nal_split_pos = H264_NALFindPos(ptr, len, &nal_head_pos, &nal_len);
-		if (nal_split_pos == -1)
-			break;
-		uint8_t type = ptr[nal_head_pos];
-		H264_NALU_HEADER header;
-
-		header.forbidden_bit = (type & 0x80) >> 7;
-		header.nal_reference_idc = (type & 0x60) >> 5;
-		header.nal_unit_type = (type & 0x1F);
-
-		printf(">%d,NAL:(%02X) %d, %d, %d: len=%d\n", nal_head_pos,
-					ptr[nal_head_pos], header.forbidden_bit, header.nal_reference_idc, header.nal_unit_type, nal_len);
-
-		if (NALU_TYPE_SPS == header.nal_unit_type)
-		{
-			printf("SPS\n");
-			// 解码SPS,获取视频图像宽、高信息
-			log_print_hex(ptr + nal_head_pos, nal_len, stdout, nal_len);
-
-			h264_sps_parse(ptr + nal_head_pos, nal_len);
-			if (mdata->sps)
-				free(mdata->sps);
-
-			mdata->sps = (char*) malloc(nal_len);
-			mdata->sps_len = nal_len;
-			memcpy(mdata->sps, ptr + nal_head_pos, mdata->sps_len);
-		}
-		if (NALU_TYPE_PPS == header.nal_unit_type)
-		{
-			printf("PPS\n");
-			if (mdata->pps)
-				free(mdata->pps);
-			mdata->pps = (char*) malloc(nal_len);
-			mdata->pps_len = nal_len;
-			memcpy(mdata->pps, ptr + nal_head_pos, mdata->pps_len);
-			log_print_hex(mdata->pps, mdata->pps_len, stdout, mdata->pps_len);
-		}
-		if (NALU_TYPE_IDR == header.nal_unit_type)
-		{
-			printf("IDR\n");
-			//I帧发送
-			ret = RTMP_SendVideoSpsPps(rtmp, nTimeStamp, mdata->sps, mdata->sps_len, mdata->pps, mdata->pps_len);
-			ret = RTMP_H264SendPacket(rtmp, ptr + nal_head_pos, nal_len, 1, nTimeStamp);
-			if (ret == -1)
-				return ret;
-		}
-		if (NALU_TYPE_SLICE == header.nal_unit_type)
-		{
-			printf("SLICE\n");
-			ret = RTMP_H264SendPacket(rtmp, ptr + nal_head_pos, nal_len, 0, nTimeStamp);
-			if (ret == -1)
-				return ret;
-		}
-
-		ptr += nal_head_pos + nal_len;
-		len -= nal_len + (nal_head_pos - nal_split_pos);
-	} while (1);
-
-	nTimeStamp += 1000 / 25; //+40
-	return ret;
-}
-
-int librtmp_test(const char *url_in, const char *url_out)
-{
-	struct stream_in streamin;
-	int ret;
-	memset(&streamin, 0, sizeof(streamin));
-	ret = stream_in_open(&streamin, url_in);
-	if (ret < 0)
-	{
-		log_e("Stream", "not open input url:%s, ret=%d\n", url_in, ret);
-		return -1;
-	}
-
-	RTMP *rtmp = NULL;
-	RTMPPacket *packet = NULL;
-	rtmp = RTMP_Alloc();
-	if (!rtmp)
-	{
-		RTMP_LogPrintf("RTMP_Alloc failed\n");
-		return -1;
-	}
-
-//初始化结构体“RTMP”中的成员变量
-	RTMP_Init(rtmp);
-	rtmp->Link.timeout = 5;
-	if (!RTMP_SetupURL(rtmp, url_out))
-	{
-		RTMP_Log(0, "SetupURL Err\n");
-		RTMP_Free(rtmp);
-		return -1;
-	}
-//发布流的时候必须要使用。如果不使用则代表接收流。
-	RTMP_EnableWrite(rtmp);
-//建立RTMP连接，创建一个RTMP协议规范中的NetConnection
-	if (!RTMP_Connect(rtmp, NULL))
-	{
-		RTMP_Log(1, "Connect Err\n");
-		RTMP_Free(rtmp);
-		return -1;
-	}
-//创建一个RTMP协议规范中的NetStream
-	if (!RTMP_ConnectStream(rtmp, 0))
-	{
-		RTMP_Log(1, "ConnectStream Err\n");
-		RTMP_Close(rtmp);
-		RTMP_Free(rtmp);
-		return -1;
-	}
-
-	RTMP_LogPrintf("Start to send data ...\n");
-
-	uint32_t start_time = 0;
-	uint32_t now_time = 0;
-	uint32_t timestamp = 0;
-	uint32_t type = 0;
-
-	start_time = RTMP_GetTime();
-
-	int iframe = 0;
-	struct media_data mediadata;
-	memset(&mediadata, 0, sizeof(mediadata));
-
+	RTSPClient *client = RTSPClient_open(url);
 	while (1)
 	{
-		ret = av_read_frame(streamin.fmt_ctx, &streamin.pkt);
-		if (ret < 0)
-		{
-			printf("av_read_frame err\n");
-			break;
-		}
-
-		if (streamin.pkt.stream_index != streamin.video_index)
-		{
-			av_packet_unref(&streamin.pkt);
-			continue;
-		}
-		if (streamin.pkt.flags && AV_PKT_FLAG_KEY)
-			iframe = 1;
-
-		if (iframe == 0)
-		{
-			av_packet_unref(&streamin.pkt);
-			continue;
-		}
-
-		ret = h264buff_send(rtmp, &mediadata, streamin.pkt.flags && AV_PKT_FLAG_KEY ? 1 : 0, streamin.pkt.data, streamin.pkt.size);
-		av_packet_unref(&streamin.pkt);
-		if (ret == -1)
-		{
-			printf("rtmp push err\n");
-			break;
-		}
-#if 0
-		timestamp = RTMP_GetTime();
-
-		packet = (RTMPPacket*) malloc(sizeof(RTMPPacket));
-		RTMPPacket_Alloc(packet, streamin.pkt.size); //64k
-		RTMPPacket_Reset(packet);
-		packet->m_hasAbsTimestamp = 0;
-		packet->m_nChannel = 0x04;
-		packet->m_nInfoField2 = rtmp->m_stream_id;
-
-		//packet header  大尺寸
-		packet->m_headerType = RTMP_PACKET_SIZE_LARGE;
-		packet->m_nTimeStamp = timestamp;//时间戳
-		packet->m_packetType = RTMP_PACKET_TYPE_VIDEO;//包类型
-		packet->m_nBodySize = streamin.pkt.size;//包大小
-		memcpy(packet->m_body, streamin.pkt.data, streamin.pkt.size);
-
-		av_packet_unref(&streamin.pkt);
-
-		if (!RTMP_IsConnected(rtmp))
-		{	            //确认连接
-			RTMP_Log(1, "rtmp is not connect\n");
-			break;
-		}
-
-		RTMP_Log(0, "send packet %d", packet->m_nBodySize);
-		//发送一个RTMP数据RTMPPacket
-		ret = RTMP_SendPacket(rtmp, packet, 0);
-		if (!ret)
-		{
-			RTMP_Log(1, "Send Error\n");
-			break;
-		}
-
-		if (packet != NULL)
-		{
-			RTMPPacket_Free(packet);
-			free(packet);
-		}
-#endif
-	}
-
-	RTMP_LogPrintf("\nSend Data Over!\n");
-	if (mediadata.pps)
-		free(mediadata.pps);
-	if (mediadata.sps)
-		free(mediadata.sps);
-
-	if (rtmp != NULL)
-	{
-		//关闭RTMP连接
-		RTMP_Close(rtmp);
-		//释放结构体RTMP
-		RTMP_Free(rtmp);
-		rtmp = NULL;
-	}
-	if (packet != NULL)
-	{
-		RTMPPacket_Free(packet);
-		free(packet);
-		packet = NULL;
+		//开始接收视频流,
+		RTSPStream_Recv(client);
 	}
 	return 0;
 }
