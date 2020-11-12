@@ -40,9 +40,12 @@ enum
 typedef struct t_h264_nalu_header
 {
 	//小端模式哦(反的)
+#if __BYTE_ORDER == __LITTLE_ENDIAN
 	unsigned char nal_unit_type :5;
 	unsigned char nal_reference_idc :2;
 	unsigned char forbidden_bit :1;
+#endif
+
 } H264_NALU_HEADER;
 
 #include "rtmp.h"
