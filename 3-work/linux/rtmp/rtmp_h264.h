@@ -61,6 +61,10 @@ extern "C"
 // nal_len : NAL长度,从头位置开始
 int H264_NALFindPos(uint8_t *data, int size, int *pnal_head_pos, int *pnal_len);
 
+int RTMP_ChangeChunkSize(RTMP *r,int outChunkSize);
+
+int RTMP_SendMetaData(RTMP *rtmp, int width, int height, int fps);
+
 //发送SPS PPS
 int RTMP_SendVideoSpsPps(RTMP *rtmp,
 			uint32_t timestamp,

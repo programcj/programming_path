@@ -35,13 +35,6 @@
 
 #include "rtmp_h264.h"
 
-void h264_sps_parse(uint8_t *sps, int len)
-{
-	int width = 0, height = 0, fps = 0;
-	h264_decode_sps(sps, len, &width, &height, &fps);
-	printf("width: %d height:%d fps:%d\n", width, height, fps);
-}
-
 static void log_print_hex(uint8_t *data, int size, FILE *stream, int maxlen)
 {
 	uint8_t *ptr = data;
@@ -110,6 +103,7 @@ int stream_in_open(struct stream_in *in, const char *url)
 	AVDictionary *opts = NULL;
 	av_dict_set(&opts, "rtsp_transport", "tcp", 0); //设置tcp or udp，默认一般优先tcp再尝试udp
 	av_dict_set(&opts, "stimeout", "3000000", 0);   //设置超时3秒
+	av_dict_set(&opts, "buffer_size", "1044000", 0);
 
 //	av_dict_set(&opts, "probsize", "4096", 0);
 //	av_dict_set(&opts, "fflags", "nobuffer", 0);
@@ -247,58 +241,7 @@ uint64_t os_time_ms()
 	struct timespec time =
 				{ 0, 0 };
 	clock_gettime(CLOCK_MONOTONIC, &time);
-
 	return (uint64_t) time.tv_sec * 1000 + (uint64_t) time.tv_nsec / 1000000;
-}
-
-void h264_video_info(uint8_t *data, int size)
-{
-	// 读取SPS帧
-	// 读取PPS帧
-	// 解码SPS,获取视频图像宽、高信息
-	//databuff_out_hex((uint8_t*) data, size, stdout, 16 * 5);
-	int nal_head_pos = 0;
-	int nal_split_pos = 0;
-	int nal_len = 0;
-	uint8_t *ptr = data;
-	int len = size;
-	int ret = 0;
-
-	do
-	{
-		nal_split_pos = H264_NALFindPos(ptr, len, &nal_head_pos, &nal_len);
-		if (nal_split_pos == -1)
-			break;
-		uint8_t type = ptr[nal_head_pos];
-		int forbidden_bit = (type & 0x80) >> 7;
-		int nal_reference_idc = (type & 0x60) >> 5;
-		int nal_unit_type = (type & 0x1F);
-
-		printf(">%d,NAL:(%02X) %d, %d, %d: len=%d\n", nal_head_pos,
-					ptr[nal_head_pos], forbidden_bit, nal_reference_idc, nal_unit_type, nal_len);
-
-		if (NALU_TYPE_SPS == nal_unit_type)
-		{
-			printf("SPS\n");
-			// 解码SPS,获取视频图像宽、高信息
-			log_print_hex(ptr + nal_head_pos, nal_len, stdout, nal_len);
-			h264_sps_parse(ptr + nal_head_pos, nal_len);
-		}
-		if (NALU_TYPE_PPS == nal_unit_type)
-		{
-			printf("PPS\n");
-		}
-		if (NALU_TYPE_IDR == nal_unit_type)
-		{
-			printf("IDR\n");
-		}
-		if (NALU_TYPE_SLICE == nal_unit_type)
-		{
-			printf("SLICE\n");
-		}
-		ptr += nal_head_pos + nal_len;
-		len -= nal_len + (nal_head_pos - nal_split_pos);
-	} while (1);
 }
 
 void stream_in2out(struct stream_in *in, struct stream_out *out)
@@ -556,14 +499,16 @@ int main(int argc, char **argv)
 	char *url_in =
 				"rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
 	//url_in = "rtsp://admin:admin@192.168.0.88:554/profile1";
+	url_in = "rtsp://192.168.0.12:8880/test.h264";
 	url_in = "rtsp://192.168.0.12:8880/hg_base.h264";
 
 	char *url_out = "rtmp://127.0.0.1:1985/live/test";
+	url_out = "rtmp://oms.lxvision.com:2935/test/test1";
+	url_out = "rtmp://192.168.0.189:1935/live/test1";
 
-	//url_out = "rtmp://oms.lxvision.com:2935/test/test1";
 	int librtmp_test(const char *url_in, const char *url_out);
-	//librtmp_test(url_in, url_out);
-	startPush(url_in, url_out);
+	librtmp_test(url_in, url_out);
+	//startPush(url_in, url_out);
 	return 0;
 }
 
@@ -583,7 +528,77 @@ struct media_data
 	char *sps;
 	int pps_len;
 	int sps_len;
+
+	int width;
+	int height;
+	int fps;
+	int status;
 };
+
+void h264_sps_parse(uint8_t *sps, int len, struct media_data *mdata)
+{
+	int width = 0, height = 0, fps = 0;
+	h264_decode_sps(sps, len, &width, &height, &fps);
+	printf("width: %d height:%d fps:%d\n", width, height, fps);
+	if (fps == 0)
+		fps = 25;
+	if (mdata)
+	{
+		mdata->width = width;
+		mdata->height = height;
+		mdata->fps = fps;
+	}
+}
+
+void h264_video_info(uint8_t *data, int size)
+{
+	// 读取SPS帧
+	// 读取PPS帧
+	// 解码SPS,获取视频图像宽、高信息
+	//databuff_out_hex((uint8_t*) data, size, stdout, 16 * 5);
+	int nal_head_pos = 0;
+	int nal_split_pos = 0;
+	int nal_len = 0;
+	uint8_t *ptr = data;
+	int len = size;
+	int ret = 0;
+
+	do
+	{
+		nal_split_pos = H264_NALFindPos(ptr, len, &nal_head_pos, &nal_len);
+		if (nal_split_pos == -1)
+			break;
+		uint8_t type = ptr[nal_head_pos];
+		int forbidden_bit = (type & 0x80) >> 7;
+		int nal_reference_idc = (type & 0x60) >> 5;
+		int nal_unit_type = (type & 0x1F);
+
+		printf(">%d,NAL:(%02X) %d, %d, %d: len=%d\n", nal_head_pos,
+					ptr[nal_head_pos], forbidden_bit, nal_reference_idc, nal_unit_type, nal_len);
+
+		if (NALU_TYPE_SPS == nal_unit_type)
+		{
+			printf("SPS\n");
+			// 解码SPS,获取视频图像宽、高信息
+			log_print_hex(ptr + nal_head_pos, nal_len, stdout, nal_len);
+			h264_sps_parse(ptr + nal_head_pos, nal_len, NULL);
+		}
+		if (NALU_TYPE_PPS == nal_unit_type)
+		{
+			printf("PPS\n");
+		}
+		if (NALU_TYPE_IDR == nal_unit_type)
+		{
+			printf("IDR\n");
+		}
+		if (NALU_TYPE_SLICE == nal_unit_type)
+		{
+			printf("SLICE\n");
+		}
+		ptr += nal_head_pos + nal_len;
+		len -= nal_len + (nal_head_pos - nal_split_pos);
+	} while (1);
+}
 
 int nTimeStamp = 0;
 
@@ -594,7 +609,6 @@ int h264buff_send(RTMP *rtmp, struct media_data *mdata, int isiframe, uint8_t *d
 // 读取PPS帧
 // 解码SPS,获取视频图像宽、高信息
 	//databuff_out_hex((uint8_t*) data, size, stdout, 16 * 5);
-
 	int nal_head_pos = 0;
 	int nal_split_pos = 0;
 	int nal_len = 0;
@@ -617,45 +631,82 @@ int h264buff_send(RTMP *rtmp, struct media_data *mdata, int isiframe, uint8_t *d
 		printf(">%d,NAL:(%02X) %d, %d, %d: len=%d\n", nal_head_pos,
 					ptr[nal_head_pos], header.forbidden_bit, header.nal_reference_idc, header.nal_unit_type, nal_len);
 
-		if (NALU_TYPE_SPS == header.nal_unit_type)
+		switch (header.nal_unit_type)
 		{
-			printf("SPS\n");
-			// 解码SPS,获取视频图像宽、高信息
-			log_print_hex(ptr + nal_head_pos, nal_len, stdout, nal_len);
+			case NALU_TYPE_SPS: //7
+			{
+				printf("SPS\n");
+				// 解码SPS,获取视频图像宽、高信息
+				log_print_hex(ptr + nal_head_pos, nal_len, stdout, nal_len);
 
-			h264_sps_parse(ptr + nal_head_pos, nal_len);
-			if (mdata->sps)
-				free(mdata->sps);
+				h264_sps_parse(ptr + nal_head_pos, nal_len, mdata);
+				if (mdata->sps)
+					free(mdata->sps);
 
-			mdata->sps = (char*) malloc(nal_len);
-			mdata->sps_len = nal_len;
-			memcpy(mdata->sps, ptr + nal_head_pos, mdata->sps_len);
-		}
-		if (NALU_TYPE_PPS == header.nal_unit_type)
-		{
-			printf("PPS\n");
-			if (mdata->pps)
-				free(mdata->pps);
-			mdata->pps = (char*) malloc(nal_len);
-			mdata->pps_len = nal_len;
-			memcpy(mdata->pps, ptr + nal_head_pos, mdata->pps_len);
-			log_print_hex(mdata->pps, mdata->pps_len, stdout, mdata->pps_len);
-		}
-		if (NALU_TYPE_IDR == header.nal_unit_type)
-		{
-			printf("IDR\n");
-			//I帧发送
-			ret = RTMP_SendVideoSpsPps(rtmp, nTimeStamp, mdata->sps, mdata->sps_len, mdata->pps, mdata->pps_len);
-			ret = RTMP_H264SendPacket(rtmp, ptr + nal_head_pos, nal_len, 1, nTimeStamp);
-			if (ret == -1)
-				return ret;
-		}
-		if (NALU_TYPE_SLICE == header.nal_unit_type)
-		{
-			printf("SLICE\n");
-			ret = RTMP_H264SendPacket(rtmp, ptr + nal_head_pos, nal_len, 0, nTimeStamp);
-			if (ret == -1)
-				return ret;
+				mdata->sps = (char*) malloc(nal_len);
+				mdata->sps_len = nal_len;
+				memcpy(mdata->sps, ptr + nal_head_pos, mdata->sps_len);
+			}
+			break;
+			case NALU_TYPE_PPS: //8
+			{
+				printf("PPS\n");
+				if (mdata->pps)
+					free(mdata->pps);
+				mdata->pps = (char*) malloc(nal_len);
+				mdata->pps_len = nal_len;
+				memcpy(mdata->pps, ptr + nal_head_pos, mdata->pps_len);
+				log_print_hex(mdata->pps, mdata->pps_len, stdout, mdata->pps_len);
+			}
+			break;
+			case NALU_TYPE_IDR: //5
+			{
+				printf("IDR\n");
+				if (mdata->status == 0)
+				{
+					printf("RTMP_SendMetaData: width:%d, height:%d fps:%d\n", mdata->width,
+								mdata->height,
+								mdata->fps);
+
+					ret = RTMP_SendMetaData(rtmp, mdata->width,
+								mdata->height,
+								mdata->fps);
+					printf("RTMP_SendVideoSpsPps\n");
+					ret = RTMP_SendVideoSpsPps(rtmp, 0,
+								mdata->sps,
+								mdata->sps_len,
+								mdata->pps,
+								mdata->pps_len
+								);
+					mdata->status = 1;
+				}
+				ret = RTMP_H264SendPacket(rtmp, ptr + nal_head_pos, nal_len, 1, nTimeStamp);
+				if (ret == -1)
+					return ret;
+			}
+			break;
+			case NALU_TYPE_SLICE: //1
+			{
+				printf("SLICE\n");
+				ret = RTMP_H264SendPacket(rtmp, ptr + nal_head_pos, nal_len, 0, nTimeStamp);
+				if (ret == -1)
+					return ret;
+			}
+			break;
+			case NALU_TYPE_SEI: //补充增强信息
+			{
+				//printf("SEI\n");
+				//ret = RTMP_H264SendPacket(rtmp, ptr + nal_head_pos, nal_len, 1, nTimeStamp);
+				//if (ret == -1)
+				//	return ret;
+			}
+			break;
+			default:
+				{
+				printf("errr ...\n");
+				exit(1);
+			}
+			break;
 		}
 
 		ptr += nal_head_pos + nal_len;
@@ -727,6 +778,10 @@ int librtmp_test(const char *url_in, const char *url_out)
 	struct media_data mediadata;
 	memset(&mediadata, 0, sizeof(mediadata));
 
+	FILE *fp = NULL;
+	//fp = fopen("test.h264", "wb");
+
+	//RTMP_ChangeChunkSize(rtmp, 512);
 	while (1)
 	{
 		ret = av_read_frame(streamin.fmt_ctx, &streamin.pkt);
@@ -750,7 +805,11 @@ int librtmp_test(const char *url_in, const char *url_out)
 			continue;
 		}
 
-		ret = h264buff_send(rtmp, &mediadata, streamin.pkt.flags && AV_PKT_FLAG_KEY ? 1 : 0, streamin.pkt.data, streamin.pkt.size);
+		printf(">>>>>>>>>\n");
+		if (fp)
+			fwrite(streamin.pkt.data, streamin.pkt.size, 1, fp);
+		ret = h264buff_send(rtmp, &mediadata, streamin.pkt.flags && AV_PKT_FLAG_KEY ? 1 : 0,
+					streamin.pkt.data, streamin.pkt.size);
 		av_packet_unref(&streamin.pkt);
 		if (ret == -1)
 		{
