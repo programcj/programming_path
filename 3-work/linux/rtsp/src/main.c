@@ -24,9 +24,11 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include "base64.h"
 #include <poll.h>
 #include <errno.h>
+#include <time.h>
+
+#include "base64.h"
 #include "md5.h"
 #include "sps_decode.h"
 
@@ -93,7 +95,6 @@ struct URLInfo
 	char password[30];
 	const char *path;
 
-	int cseq;
 	char *Authenticate; //
 	char Authorization[300];
 };
@@ -283,9 +284,9 @@ typedef struct _RTSPClient
 	int fd;
 	struct URLInfo urlinfo;
 	struct SDPInfo sdpinfo;
-
 	char UserAgent[30];
-	int sessionid;
+	int CSeq;
+	unsigned long sessionid;
 } RTSPClient;
 
 int urldecode(const char *url, struct URLInfo *urlinfo)
@@ -453,7 +454,8 @@ int rtsp_response_recv(int fd, char **text, size_t *textlen)
 				ret = recv(fd, buff, 1, 0); //不能一下接收完
 				if (ret <= 0)
 				{
-					if (ret < 0 && (errno == EAGAIN || errno == EINTR)) {
+					if (ret < 0 && (errno == EAGAIN || errno == EINTR))
+					{
 						printf("非阻塞继续\n");
 						continue;
 					}
@@ -527,13 +529,13 @@ int rtsp_OPTIONS(RTSPClient *client)
 	char *ptr = buff;
 	struct URLInfo *urlinfo = &client->urlinfo;
 	ptr += sprintf(buff, "OPTIONS %s%s:%d%s RTSP/1.0\r\n", urlinfo->prefix, urlinfo->host, urlinfo->port, urlinfo->path);
-	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
 	ptr += sprintf(ptr, "\r\n");
 	ret = socket_send_text(client->fd, buff);
 	if (ret < 0)
 		return -1;
-	urlinfo->cseq++;
+	client->CSeq++;
 
 	char *resp_text = NULL;
 	size_t resp_len = 0;
@@ -560,7 +562,7 @@ int rtsp_DESCRIBE_base(RTSPClient *client)
 	struct SDPInfo *psdpinfo = &client->sdpinfo;
 
 	ptr += sprintf(buff, "DESCRIBE %s%s:%d%s RTSP/1.0\r\n", urlinfo->prefix, urlinfo->host, urlinfo->port, urlinfo->path);
-	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	if (strlen(urlinfo->Authorization) > 0)
 		ptr += sprintf(ptr, "%s", urlinfo->Authorization);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
@@ -568,7 +570,7 @@ int rtsp_DESCRIBE_base(RTSPClient *client)
 	ret = socket_send_text(fd, buff);
 	if (ret < 0)
 		return -1;
-	urlinfo->cseq++;
+	client->CSeq++;
 
 	char *resp_text = NULL;
 	size_t resp_len = 0;
@@ -787,7 +789,7 @@ int rtsp_DESCRIBE(RTSPClient *client)
 }
 
 //客户端提醒服务器建立会话,并确定传输模式:
-int rtsp_SETUP(RTSPClient *client, int sessionid)
+int rtsp_SETUP(RTSPClient *client, unsigned long sessionid)
 {
 	char headstr[1024];
 	char *ptr = headstr;
@@ -802,9 +804,9 @@ int rtsp_SETUP(RTSPClient *client, int sessionid)
 	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n");
 	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
 	ptr += sprintf(ptr, "x-Dynamic-Rate: 0\r\n");
-	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
-	ptr += sprintf(ptr, "Session: %d\r\n", sessionid);
+	ptr += sprintf(ptr, "Session: %lu\r\n", sessionid);
 	if (strlen(urlinfo->Authorization) > 0)
 	{
 		if (strncasecmp(client->urlinfo.Authenticate, "Digest ", strlen("Digest ")) == 0)
@@ -828,6 +830,17 @@ int rtsp_SETUP(RTSPClient *client, int sessionid)
 	size_t textlen = 0;
 	char pref[10];
 	ret = rtsp_response_recv(client->fd, &response_text, &textlen);
+	if (ret == 200 && response_text)
+	{
+		//Session: 194909530000;timeout=60
+		char *sessionptr = strstr(response_text, "Session:");
+		if (sessionptr)
+		{
+			sessionptr += strlen("Session:") + 1;
+			client->sessionid = atol(sessionptr);
+			printf("Sessionid:%lu", client->sessionid);
+		}
+	}
 	if (response_text)
 	{
 		free(response_text);
@@ -837,7 +850,7 @@ int rtsp_SETUP(RTSPClient *client, int sessionid)
 	return ret;
 }
 
-int rtsp_PLAY(RTSPClient *client, int sessionid)
+int rtsp_PLAY(RTSPClient *client, unsigned long sessionid)
 {
 	char headstr[1024];
 	char *ptr = headstr;
@@ -850,9 +863,9 @@ int rtsp_PLAY(RTSPClient *client, int sessionid)
 				urlinfo->path);
 	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n");
 	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
-	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
-	ptr += sprintf(ptr, "Session: %d\r\n", sessionid);
+	ptr += sprintf(ptr, "Session: %lu\r\n", sessionid);
 	ptr += sprintf(ptr, "Range: npt=0.000-\r\n");
 
 	if (strlen(urlinfo->Authorization) > 0)
@@ -898,7 +911,7 @@ int rtsp_GET_PARAMETER(RTSPClient *client, int sessionid)
 				urlinfo->prefix, urlinfo->host,
 				urlinfo->port,
 				urlinfo->path);
-	ptr += sprintf(ptr, "CSeq: %d\r\n", urlinfo->cseq);
+	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
 	ptr += sprintf(ptr, "Session: %d\r\n", sessionid);
 	if (strlen(urlinfo->Authorization) > 0)
@@ -960,6 +973,17 @@ RTSPClient *RTSPClient_open(const char *url)
 	free(client->url);
 	free(client);
 	return NULL;
+}
+
+void RTSPClient_close(RTSPClient *client)
+{
+	if (client->fd != -1 && client->fd != 0)
+		close(client->fd);
+	if (client->urlinfo.Authenticate)
+		free(client->urlinfo.Authenticate);
+	if (client->url)
+		free(client->url);
+	free(client);
 }
 
 /**
@@ -1060,6 +1084,23 @@ typedef struct
 	unsigned char S :1;
 } FU_HEADER;   // 1 BYTES
 
+//H264定义的类型 values for nal_unit_type
+enum
+{
+	NALU_TYPE_SLICE = 1,
+	NALU_TYPE_DPA = 2,
+	NALU_TYPE_DPB = 3,
+	NALU_TYPE_DPC = 4,
+	NALU_TYPE_IDR = 5,
+	NALU_TYPE_SEI = 6,
+	NALU_TYPE_SPS = 7,
+	NALU_TYPE_PPS = 8,
+	NALU_TYPE_AUD = 9,
+	NALU_TYPE_EOSEQ = 10,
+	NALU_TYPE_EOSTREAM = 11,
+	NALU_TYPE_FILL = 12
+};
+
 int RTSPStream_Recv(RTSPClient *client)
 {
 	//与SETUP有关
@@ -1090,7 +1131,8 @@ int RTSPStream_Recv(RTSPClient *client)
 		pofds.fd = client->fd;
 		pofds.events = POLLIN;
 		ret = poll(&pofds, 1, 100);
-		if(ret<0){
+		if (ret < 0)
+		{
 			printf("poll err\n");
 			break;
 		}
@@ -1139,14 +1181,24 @@ int RTSPStream_Recv(RTSPClient *client)
 					printf("rtsp response ok\n");
 					continue;
 				}
+
 				if (buff[0] == '$')
 				{
+					magic = buff[0];
 					channel = buff[1];
 					memcpy(&len, buff + 2, 2);
 					len = ntohs(len);
-					printf("RTSP Interleavel Frame: %d %d %d\n", magic, channel, len);
-					//再接收len字节
+					//https://www.jianshu.com/p/334a4198b250
+					//channel: 0 Video RTP;
+					//		   1 Video RTCP;
+					//  	   2 Audio RTP;
+					//         3 Audio RTCP;
+					printf("RTSP Interleaved Frame, magic:%d channel:%d len:%d\n",
+								magic,
+								channel,
+								len);
 
+					//再接收len字节
 					pos = 0;
 					while (pos < len)
 					{
@@ -1157,23 +1209,42 @@ int RTSPStream_Recv(RTSPClient *client)
 						}
 					}
 
-					if (pos == len) //RTP 头
+					switch (channel)
+					{
+						case 0x00:
+							printf("Video RTP ");
+						break;
+						case 0x01:
+							printf("Video RTCP ");
+						break;
+						case 0x02:
+							printf("Audio RTP ");
+						break;
+						case 0x03:
+							printf("Audio RTCP ");
+						break;
+						default:
+						break;
+					}
+
+					if (pos == len && channel == 0) //RTP 头
 					{
 						struct rtp_pkt_header rtp_hdr;
 						memcpy(&rtp_hdr, buff, sizeof(rtp_hdr));
-						printf("V=%d ", rtp_hdr._base.info.v);
+						printf("RTP V=%d ", rtp_hdr._base.info.v);
 						printf("PT=%d ", rtp_hdr._base.info.PT);
 						printf("seq:%u ", rtp_hdr.seqnum);
 						printf("timestamp:%u ", rtp_hdr.timestamp);
 						printf("ssrc:%u\n", rtp_hdr.ssrc);
 						//exit(0);
-						if (rtp_hdr._base.info.PT == 96)
-						{ //H264
-
+						if (rtp_hdr._base.info.PT != 96)
+						{
+							//H264
+							printf("非H264包\n");
+							continue;
 						}
 						//如果UALU数据＜1500（自己设定），使用单一包发送：
 						//如果NALU数据＞1500，使用分片发送：（分三种情况设备：第一次RTP，中间的RTP，最后一次RTP）
-
 						uint8_t *h264_packet = buff + sizeof(rtp_hdr);
 						NALU_HEADER *nalu_hdr = NULL;
 						nalu_hdr = (NALU_HEADER*) &buff[12];
@@ -1183,10 +1254,19 @@ int RTSPStream_Recv(RTSPClient *client)
 
 						if (nalu_hdr->TYPE > 0 && nalu_hdr->TYPE < 24)  //单包
 						{
-							if (fp)
+							printf("单包:%d\n", nalu_hdr->TYPE);
+							switch (nalu_hdr->TYPE)
 							{
-								fwrite(nal, 4, 1, fp);
-								fwrite(h264_packet, 1, len - sizeof(rtp_hdr), fp);
+								case NALU_TYPE_SPS:
+									case NALU_TYPE_PPS:
+									case NALU_TYPE_SLICE:
+									default:
+									if (fp)
+									{
+										fwrite(nal, 4, 1, fp);
+										fwrite(h264_packet, 1, len - sizeof(rtp_hdr), fp);
+									}
+								break;
 							}
 						}
 						else if (nalu_hdr->TYPE == 24)  //STAP-A   单一时间的组合包
@@ -1200,7 +1280,6 @@ int RTSPStream_Recv(RTSPClient *client)
 							printf("FU_INDICATOR->F     :%d\n", fu_ind->F);
 							printf("FU_INDICATOR->NRI   :%d\n", fu_ind->NRI);
 							printf("FU_INDICATOR->TYPE  :%d\n", fu_ind->TYPE);
-
 							printf("FU_HEADER->S        :%d\n", fu_hdr->S);
 							printf("FU_HEADER->E        :%d\n", fu_hdr->E);
 							printf("FU_HEADER->R        :%d\n", fu_hdr->R);
@@ -1271,15 +1350,8 @@ void urldecode_test(const char *url)
 int main(int argc, char **argv)
 {
 	const char *url = "rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
+	//url = "rtsp://admin:admin@192.168.0.88:554/profile1";
 
-	url = "rtsp://admin:admin@192.168.0.88:554/profile1";
-//	urldecode_test(url);
-//	struct URLInfo urlinfo;
-//	memset(&urlinfo, 0, sizeof(urlinfo));
-//	strcpy(urlinfo.useranme, "admin");
-//	strcpy(urlinfo.password, "admin");
-//	urlinfo.Authenticate = "Digest aa=bb,realm=\"RTSP SERVER\", nonce=\"8f41543422d38188e383815983a30377\", stale=\"FALSE\"";
-//	digest_(&urlinfo);
 #if 0
 	urldecode_test("rtsp://admin:admin@11@192.168.0.150:554/paht1");
 	urldecode_test("rtsp://admin:@192.168.0.150:554/paht1");
@@ -1288,22 +1360,6 @@ int main(int argc, char **argv)
 	urldecode_test("rtsp:///paht1");
 	urldecode_test("http://www.baidu.com/paht1");
 #endif
-	struct rtp_pkt_header rtp;
-	uint8_t packet_bytes[] =
-				{
-							0x80, 0x60, 0xb2, 0x55, 0x35, 0xd9, 0xdc, 0xdd,
-							0x0b, 0xfe, 0x81, 0x7a, 0x67, 0x4d, 0x00, 0x2a,
-							0x96, 0x35, 0x40, 0xf0, 0x04, 0x4f, 0xcb, 0x37,
-							0x01, 0x01, 0x01, 0x02 };
-
-	memcpy(&rtp, packet_bytes, sizeof(rtp));
-	printf("V=%d ", rtp._base.info.v);
-	printf("PT=%d ", rtp._base.info.PT);
-	printf("seq:%u ", rtp.seqnum);
-	printf("timestamp:%u ", rtp.timestamp);
-	printf("ssrc:%u\n", rtp.ssrc);
-//	exit(1);
-
 	RTSPClient *client = RTSPClient_open(url);
 	//开始接收视频流,
 	RTSPStream_Recv(client);
