@@ -286,7 +286,8 @@ typedef struct _RTSPClient
 	struct SDPInfo sdpinfo;
 	char UserAgent[30];
 	int CSeq;
-	unsigned long sessionid;
+	//unsigned long sessionid;
+	char sessionid_str[30];
 } RTSPClient;
 
 int urldecode(const char *url, struct URLInfo *urlinfo)
@@ -789,7 +790,22 @@ int rtsp_DESCRIBE(RTSPClient *client)
 }
 
 //客户端提醒服务器建立会话,并确定传输模式:
-int rtsp_SETUP(RTSPClient *client, unsigned long sessionid)
+/**
+================
+SETUP rtsp://192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif/trackID=0 RTSP/1.0
+Transport: RTP/AVP/TCP;unicast;interleaved=0-1
+x-Dynamic-Rate: 0
+CSeq: 3
+User-Agent: CJRTSPClientV1.0
+Authorization: Basic YWRtaW46YWRtaW4=
+================
+RTSP/1.0 200 OK
+CSeq: 3
+Session: 309908140000;timeout=60
+Transport: RTP/AVP/TCP;unicast;interleaved=0-1;ssrc=44BB06DC
+x-Dynamic-Rate: 1
+**/
+int rtsp_SETUP(RTSPClient *client)
 {
 	char headstr[1024];
 	char *ptr = headstr;
@@ -801,12 +817,14 @@ int rtsp_SETUP(RTSPClient *client, unsigned long sessionid)
 				urlinfo->port,
 				urlinfo->path,
 				client->sdpinfo.media_video_attr_control);
-	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n");
+	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
 	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
 	ptr += sprintf(ptr, "x-Dynamic-Rate: 0\r\n");
 	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
-	ptr += sprintf(ptr, "Session: %lu\r\n", sessionid);
+	if(strlen(client->sessionid_str)>0)
+		ptr += sprintf(ptr, "Session: %s\r\n", client->sessionid_str);
+
 	if (strlen(urlinfo->Authorization) > 0)
 	{
 		if (strncasecmp(client->urlinfo.Authenticate, "Digest ", strlen("Digest ")) == 0)
@@ -837,8 +855,19 @@ int rtsp_SETUP(RTSPClient *client, unsigned long sessionid)
 		if (sessionptr)
 		{
 			sessionptr += strlen("Session:") + 1;
-			client->sessionid = atol(sessionptr);
-			printf("Sessionid:%lu", client->sessionid);
+			const char *pend = strchr(sessionptr, ';');
+			if (pend == NULL)
+				pend = strchr(sessionptr, '\r');
+			if (pend == NULL)
+				pend = strchr(sessionptr, '\n');
+			while (*sessionptr == ' ')
+				sessionptr++;
+			int len = pend - sessionptr;
+			if (len > 0)
+			{
+				strncpy(client->sessionid_str, sessionptr, len);
+			}
+			printf("Sessionid:[%s]", client->sessionid_str);
 		}
 	}
 	if (response_text)
@@ -850,7 +879,7 @@ int rtsp_SETUP(RTSPClient *client, unsigned long sessionid)
 	return ret;
 }
 
-int rtsp_PLAY(RTSPClient *client, unsigned long sessionid)
+int rtsp_PLAY(RTSPClient *client)
 {
 	char headstr[1024];
 	char *ptr = headstr;
@@ -861,11 +890,12 @@ int rtsp_PLAY(RTSPClient *client, unsigned long sessionid)
 				urlinfo->prefix, urlinfo->host,
 				urlinfo->port,
 				urlinfo->path);
-	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n");
+	//信道0和1对流数据以及控制信息进行交织
+	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
 	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
 	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
-	ptr += sprintf(ptr, "Session: %lu\r\n", sessionid);
+	ptr += sprintf(ptr, "Session: %s\r\n", client->sessionid_str);
 	ptr += sprintf(ptr, "Range: npt=0.000-\r\n");
 
 	if (strlen(urlinfo->Authorization) > 0)
@@ -900,7 +930,7 @@ int rtsp_PLAY(RTSPClient *client, unsigned long sessionid)
 	return ret;
 }
 
-int rtsp_GET_PARAMETER(RTSPClient *client, int sessionid)
+int rtsp_GET_PARAMETER(RTSPClient *client)
 {
 	char headstr[1024];
 	char *ptr = headstr;
@@ -913,7 +943,7 @@ int rtsp_GET_PARAMETER(RTSPClient *client, int sessionid)
 				urlinfo->path);
 	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
-	ptr += sprintf(ptr, "Session: %d\r\n", sessionid);
+	ptr += sprintf(ptr, "Session: %s\r\n", client->sessionid_str);
 	if (strlen(urlinfo->Authorization) > 0)
 	{
 		if (strncasecmp(client->urlinfo.Authenticate, "Digest ", strlen("Digest ")) == 0)
@@ -956,12 +986,10 @@ RTSPClient *RTSPClient_open(const char *url)
 	ret = rtsp_DESCRIBE(client);
 	if (ret != 200)
 		goto _err;
-	client->sessionid = 100001;
-
-	ret = rtsp_SETUP(client, client->sessionid);
+	ret = rtsp_SETUP(client);
 	if (ret != 200)
 		goto _err;
-	ret = rtsp_PLAY(client, client->sessionid);
+	ret = rtsp_PLAY(client);
 	if (ret != 200)
 		goto _err;
 	return client;
@@ -1193,7 +1221,7 @@ int RTSPStream_Recv(RTSPClient *client)
 					//		   1 Video RTCP;
 					//  	   2 Audio RTP;
 					//         3 Audio RTCP;
-					printf("RTSP Interleaved Frame, magic:%d channel:%d len:%d\n",
+					printf("RTSP Interleaved Frame, magic:%c channel:%d len:%d\n",
 								magic,
 								channel,
 								len);
@@ -1224,7 +1252,7 @@ int RTSPStream_Recv(RTSPClient *client)
 							printf("Audio RTCP ");
 						break;
 						default:
-						break;
+							break;
 					}
 
 					if (pos == len && channel == 0) //RTP 头
@@ -1333,7 +1361,7 @@ int RTSPStream_Recv(RTSPClient *client)
 			if (abs(time(NULL) - time_old) > 10)
 			{
 				time_old = time(NULL);
-				rtsp_GET_PARAMETER(client, client->sessionid);
+				rtsp_GET_PARAMETER(client);
 			}
 		}
 	}
@@ -1351,7 +1379,8 @@ int main(int argc, char **argv)
 {
 	const char *url = "rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
 	//url = "rtsp://admin:admin@192.168.0.88:554/profile1";
-
+	//rtsp://admin:admin@192.168.0.121:554/profile1
+	//rtsp://admin:admin@192.168.0.161:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
 #if 0
 	urldecode_test("rtsp://admin:admin@11@192.168.0.150:554/paht1");
 	urldecode_test("rtsp://admin:@192.168.0.150:554/paht1");
