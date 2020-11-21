@@ -24,6 +24,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <errno.h>
 #include <time.h>
@@ -33,6 +34,48 @@
 #include "sps_decode.h"
 
 #define DEBUG 1
+
+struct databuff
+{
+	char *data;
+	int size;
+	int wpos; //
+	int rpos; //
+};
+
+void databuff_clear(struct databuff *buff)
+{
+	buff->wpos = 0;
+	buff->rpos = 0;
+}
+
+int databuff_write(struct databuff *buff, void *data, int size)
+{
+	if (buff->wpos + size > buff->size)
+		return -1;
+	memcpy(buff->data + buff->wpos, data, size);
+	buff->wpos += size;
+	return size;
+}
+
+struct databuff *databuff_new(int size)
+{
+	struct databuff *buff = (struct databuff *) malloc(sizeof(struct databuff) + size);
+	if (buff == NULL)
+		return NULL;
+	buff->data = ((char *) buff) + sizeof(struct databuff);
+	buff->size = size;
+	buff->wpos = 0;
+	buff->rpos = 0;
+	memset(buff->data, 0, size);
+	return buff;
+}
+
+void databuff_free(struct databuff *buff)
+{
+	if (buff)
+		free(buff);
+}
 
 int string_http_head_get_content_length(const char *buffhead, int headlen)
 {
@@ -281,6 +324,7 @@ void sdp_parse(const char *str, int len, struct SDPInfo *psdpinfo)
 typedef struct _RTSPClient
 {
 	char *url;
+	char *baseURL;
 	int fd;
 	struct URLInfo urlinfo;
 	struct SDPInfo sdpinfo;
@@ -288,6 +332,10 @@ typedef struct _RTSPClient
 	int CSeq;
 	//unsigned long sessionid;
 	char sessionid_str[30];
+
+	struct databuff *buff_rtsp;
+	struct databuff *buff_rtcp_rtp;
+	void (*callbk_rtp)(struct _RTSPClient *client, int channel, int len, uint8_t *data);
 } RTSPClient;
 
 int urldecode(const char *url, struct URLInfo *urlinfo)
@@ -366,6 +414,23 @@ int urldecode(const char *url, struct URLInfo *urlinfo)
 	return 0;
 }
 
+const char *urlpathptr(const char *url)
+{
+	//rtsp://192.168.0.12:8880/E:/mp4/hg_base.h264/
+	// /E:/mp4/hg_base.h264/
+	if (url == NULL)
+		return NULL;
+	const char *ptr = strstr(url, "://");
+	if (NULL == ptr)
+		return NULL;
+	ptr += 3;
+
+	const char *pspilt = strchr(ptr, '/');
+	if (pspilt)
+		return pspilt;
+	return NULL;
+}
+
 int socket_tcp(const char *host, int port)
 {
 	int ret;
@@ -398,7 +463,7 @@ int socket_tcp(const char *host, int port)
 
 int socket_send_text(int fd, const char *buf)
 {
-	printf(">%s", buf);
+	printf(">>>>>>>>>>>>>>\n%s", buf);
 	int len = strlen(buf);
 	int ret;
 	int pos = 0;
@@ -423,6 +488,7 @@ int socket_recv_text(int fd, char *buf, int len)
 	return recv(fd, buf, len, 0);
 }
 
+#if 0
 int rtsp_response_recv(int fd, char **text, size_t *textlen)
 {
 	struct pollfd pofd;
@@ -439,13 +505,18 @@ int rtsp_response_recv(int fd, char **text, size_t *textlen)
 	char buff[1024];
 	int content_length = 0;
 	int head_lenght = -1;
+	int loop = 1;
 
-	while (1)
+	while (loop)
 	{
 		ret = poll(&pofd, 1, 100);
 		if (ret == 0)
-			continue;
-		if (ret > 0)
+		continue;
+		//先接收4个长度
+		if (ret < 0)
+		break;
+
+		if (POLLIN == (pofd.revents & POLLIN))
 		{
 			/**
 			 * 1字节接收,再接收内容
@@ -473,15 +544,15 @@ int rtsp_response_recv(int fd, char **text, size_t *textlen)
 				{
 					head_lenght = string_http_heard_getlength(membuf, memlen);
 					if (head_lenght != -1)
-						content_length = string_http_head_get_content_length(membuf, head_lenght);
+					content_length = string_http_head_get_content_length(membuf, head_lenght);
 					if (content_length == -1)
-						content_length = 0;
+					content_length = 0;
 				}
 
 				if (head_lenght != -1)
 				{
 					if (content_length + head_lenght == memlen)
-						break;
+					break;
 				}
 			}
 		}
@@ -517,11 +588,14 @@ int rtsp_response_recv(int fd, char **text, size_t *textlen)
 		else
 		{
 			if (membuf != NULL)
-				free(membuf);
+			free(membuf);
 		}
 	}
 	return -1;
 }
+#endif
+
+int RTSPClient_RTSPRecv(RTSPClient *client);
 
 int rtsp_OPTIONS(RTSPClient *client)
 {
@@ -538,18 +612,13 @@ int rtsp_OPTIONS(RTSPClient *client)
 		return -1;
 	client->CSeq++;
 
-	char *resp_text = NULL;
-	size_t resp_len = 0;
-	ret = rtsp_response_recv(client->fd, &resp_text, &resp_len);
+	ret = RTSPClient_RTSPRecv(client);
+	if (ret < 0)
+		return -1;
+
 	char pref[10];
 	int code = 0;
-
-	if (resp_text)
-		sscanf(resp_text, "%[^ ] %d ", pref, &code);
-	else
-		code = -1;
-	if (resp_text)
-		free(resp_text);
+	sscanf(client->buff_rtsp->data, "%[^ ] %d ", pref, &code);
 	return code;
 }
 
@@ -573,22 +642,18 @@ int rtsp_DESCRIBE_base(RTSPClient *client)
 		return -1;
 	client->CSeq++;
 
-	char *resp_text = NULL;
-	size_t resp_len = 0;
-	ret = rtsp_response_recv(fd, &resp_text, &resp_len);
+	ret = RTSPClient_RTSPRecv(client);
+	if (ret < 0)
+		return -1;
 
 	char pref[10];
 	int code = 0;
-
-	if (resp_text)
-		sscanf(resp_text, "%[^ ] %d ", pref, &code);
-	else
-		code = -1;
+	sscanf(client->buff_rtsp->data, "%[^ ] %d ", pref, &code);
 
 	if (code == 401)
 	{
 		//需要加密发送哦
-		const char *auth = strstr(resp_text, "WWW-Authenticate:");
+		const char *auth = strstr(client->buff_rtsp->data, "WWW-Authenticate:");
 		if (auth)
 		{
 			auth += strlen("WWW-Authenticate:");
@@ -611,15 +676,34 @@ int rtsp_DESCRIBE_base(RTSPClient *client)
 	if (code == 200)
 	{
 		//需要得到 sdp内容
-		int head_len = string_http_heard_getlength(resp_text, strlen(resp_text));
-		int size = strlen(resp_text);
-		printf("--------SDP数据----------\n%s", resp_text + head_len);
+		int head_len = string_http_heard_getlength(client->buff_rtsp->data, client->buff_rtsp->wpos);
+		int size = client->buff_rtsp->wpos;
+
+		const char *pbaseUrl = strstr(client->buff_rtsp->data, "Content-Base:");
+		const char *end = NULL;
+		if (pbaseUrl)
+		{
+			pbaseUrl += strlen("Content-Base:");
+			while (*pbaseUrl == ' ')
+				pbaseUrl++;
+			end = pbaseUrl;
+			while (*end && *end != '\n' && *end != '\r')
+				end++;
+			if (end - pbaseUrl > 0)
+			{
+				int baseURL_len = end - pbaseUrl + 1;
+				char *baseUrl = (char *) malloc(baseURL_len);
+				baseUrl[baseURL_len - 1] = 0;
+				strncpy(baseUrl, pbaseUrl, baseURL_len - 1);
+				printf("baseURL:%s\n", baseUrl);
+				client->baseURL = baseUrl;
+			}
+		}
+		printf("--------SDP数据----------\n%s", client->buff_rtsp->data + head_len);
 		//m: media descriptions
 		//a: attributes
-		sdp_parse(resp_text + head_len, size - head_len, psdpinfo);
+		sdp_parse(client->buff_rtsp->data + head_len, size - head_len, psdpinfo);
 	}
-	if (resp_text)
-		free(resp_text);
 	return code;
 }
 
@@ -791,20 +875,20 @@ int rtsp_DESCRIBE(RTSPClient *client)
 
 //客户端提醒服务器建立会话,并确定传输模式:
 /**
-================
-SETUP rtsp://192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif/trackID=0 RTSP/1.0
-Transport: RTP/AVP/TCP;unicast;interleaved=0-1
-x-Dynamic-Rate: 0
-CSeq: 3
-User-Agent: CJRTSPClientV1.0
-Authorization: Basic YWRtaW46YWRtaW4=
-================
-RTSP/1.0 200 OK
-CSeq: 3
-Session: 309908140000;timeout=60
-Transport: RTP/AVP/TCP;unicast;interleaved=0-1;ssrc=44BB06DC
-x-Dynamic-Rate: 1
-**/
+ ================
+ SETUP rtsp://192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif/trackID=0 RTSP/1.0
+ Transport: RTP/AVP/TCP;unicast;interleaved=0-1
+ x-Dynamic-Rate: 0
+ CSeq: 3
+ User-Agent: CJRTSPClientV1.0
+ Authorization: Basic YWRtaW46YWRtaW4=
+ ================
+ RTSP/1.0 200 OK
+ CSeq: 3
+ Session: 309908140000;timeout=60
+ Transport: RTP/AVP/TCP;unicast;interleaved=0-1;ssrc=44BB06DC
+ x-Dynamic-Rate: 1
+ **/
 int rtsp_SETUP(RTSPClient *client)
 {
 	char headstr[1024];
@@ -812,17 +896,22 @@ int rtsp_SETUP(RTSPClient *client)
 	struct URLInfo *urlinfo = &client->urlinfo;
 	int ret;
 
-	ptr += sprintf(ptr, "SETUP %s%s:%d%s/%s RTSP/1.0\r\n",
+	const char *urlbase_path = urlpathptr(client->baseURL);
+	if (urlbase_path == NULL)
+		urlbase_path = urlinfo->path;
+
+	ptr += sprintf(ptr, "SETUP %s%s:%d%s%s RTSP/1.0\r\n",
 				urlinfo->prefix, urlinfo->host,
 				urlinfo->port,
-				urlinfo->path,
+				urlbase_path,
 				client->sdpinfo.media_video_attr_control);
+
 	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
 	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
 	ptr += sprintf(ptr, "x-Dynamic-Rate: 0\r\n");
 	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
-	if(strlen(client->sessionid_str)>0)
+	if (strlen(client->sessionid_str) > 0)
 		ptr += sprintf(ptr, "Session: %s\r\n", client->sessionid_str);
 
 	if (strlen(urlinfo->Authorization) > 0)
@@ -844,14 +933,18 @@ int rtsp_SETUP(RTSPClient *client)
 	if (ret < 0)
 		return -1;
 
-	char *response_text = NULL;
-	size_t textlen = 0;
+	ret = RTSPClient_RTSPRecv(client);
+	if (ret < 0)
+		return -1;
+	client->CSeq++;
 	char pref[10];
-	ret = rtsp_response_recv(client->fd, &response_text, &textlen);
-	if (ret == 200 && response_text)
+	int code = 0;
+	sscanf(client->buff_rtsp->data, "%[^ ] %d ", pref, &code);
+
+	if (code == 200)
 	{
 		//Session: 194909530000;timeout=60
-		char *sessionptr = strstr(response_text, "Session:");
+		char *sessionptr = strstr(client->buff_rtsp->data, "Session:");
 		if (sessionptr)
 		{
 			sessionptr += strlen("Session:") + 1;
@@ -869,14 +962,9 @@ int rtsp_SETUP(RTSPClient *client)
 			}
 			printf("Sessionid:[%s]", client->sessionid_str);
 		}
-	}
-	if (response_text)
-	{
-		free(response_text);
-	}
-	if (ret == 200)
 		return 200;
-	return ret;
+	}
+	return code;
 }
 
 int rtsp_PLAY(RTSPClient *client)
@@ -886,10 +974,15 @@ int rtsp_PLAY(RTSPClient *client)
 	struct URLInfo *urlinfo = &client->urlinfo;
 	int ret;
 
+	const char *urlbase_path = urlpathptr(client->baseURL);
+	if (urlbase_path == NULL)
+		urlbase_path = urlinfo->path;
+
 	ptr += sprintf(ptr, "PLAY %s%s:%d%s RTSP/1.0\r\n",
 				urlinfo->prefix, urlinfo->host,
 				urlinfo->port,
-				urlinfo->path);
+				urlbase_path);
+
 	//信道0和1对流数据以及控制信息进行交织
 	ptr += sprintf(ptr, "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
 	//ptr += sprintf(ptr, "Transport: RTP/AVP;unicast;client_port=57446-57447\r\n"); //UDP
@@ -917,17 +1010,17 @@ int rtsp_PLAY(RTSPClient *client)
 	if (ret < 0)
 		return -1;
 
-	char *response_text = NULL;
-	size_t textlen = 0;
+	ret = RTSPClient_RTSPRecv(client);
+	if (ret < 0)
+		return -1;
+	client->CSeq++;
 	char pref[10];
-	ret = rtsp_response_recv(client->fd, &response_text, &textlen);
-	if (response_text)
-	{
-		free(response_text);
-	}
-	if (ret == 200)
+	int code = 0;
+	sscanf(client->buff_rtsp->data, "%[^ ] %d ", pref, &code);
+
+	if (code == 200)
 		return 200;
-	return ret;
+	return code;
 }
 
 int rtsp_GET_PARAMETER(RTSPClient *client)
@@ -937,10 +1030,15 @@ int rtsp_GET_PARAMETER(RTSPClient *client)
 	struct URLInfo *urlinfo = &client->urlinfo;
 	int ret;
 
-	ptr += sprintf(ptr, "GET_PARAMETER %s%s:%d%s/ RTSP/1.0\r\n",
+	const char *urlbase_path = urlpathptr(client->baseURL);
+	if (urlbase_path == NULL)
+		urlbase_path = urlinfo->path;
+
+	ptr += sprintf(ptr, "GET_PARAMETER %s%s:%d%s RTSP/1.0\r\n",
 				urlinfo->prefix, urlinfo->host,
 				urlinfo->port,
-				urlinfo->path);
+				urlbase_path);
+
 	ptr += sprintf(ptr, "CSeq: %d\r\n", client->CSeq);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
 	ptr += sprintf(ptr, "Session: %s\r\n", client->sessionid_str);
@@ -963,12 +1061,16 @@ int rtsp_GET_PARAMETER(RTSPClient *client)
 		return -1;
 	return 0;
 }
+void RTSPClient_close(RTSPClient *client);
 
 RTSPClient *RTSPClient_open(const char *url)
 {
 	RTSPClient *client = (RTSPClient *) calloc(sizeof(RTSPClient), 1);
 	if (client == NULL)
 		return NULL;
+	client->buff_rtsp = databuff_new(2048);
+	client->buff_rtcp_rtp = databuff_new(1024 * 200); //max 65535
+
 	strcpy(client->UserAgent, "CJRTSPClientV1.0");
 	client->url = strdup(url);
 	urldecode(client->url, &client->urlinfo);
@@ -976,8 +1078,7 @@ RTSPClient *RTSPClient_open(const char *url)
 	int fd = socket_tcp(client->urlinfo.host, client->urlinfo.port);
 	if (fd == -1)
 	{
-		free(client->url);
-		free(client);
+		RTSPClient_close(client);
 		return NULL;
 	}
 	printf("connect success %d,[%s]\n", fd, client->urlinfo.host);
@@ -995,11 +1096,7 @@ RTSPClient *RTSPClient_open(const char *url)
 	return client;
 
 	_err:
-	close(client->fd);
-	if (client->urlinfo.Authenticate)
-		free(client->urlinfo.Authenticate);
-	free(client->url);
-	free(client);
+	RTSPClient_close(client);
 	return NULL;
 }
 
@@ -1011,6 +1108,10 @@ void RTSPClient_close(RTSPClient *client)
 		free(client->urlinfo.Authenticate);
 	if (client->url)
 		free(client->url);
+	if (client->buff_rtsp)
+		databuff_free(client->buff_rtsp);
+	if (client->buff_rtcp_rtp)
+		databuff_free(client->buff_rtcp_rtp);
 	free(client);
 }
 
@@ -1110,7 +1211,7 @@ typedef struct
 	unsigned char R :1;
 	unsigned char E :1;
 	unsigned char S :1;
-} FU_HEADER;   // 1 BYTES
+} FU_HEADER; // 1 BYTES
 
 //H264定义的类型 values for nal_unit_type
 enum
@@ -1129,7 +1230,208 @@ enum
 	NALU_TYPE_FILL = 12
 };
 
-int RTSPStream_Recv(RTSPClient *client)
+int _RTSPClient_RecvRTSPTextMsg(RTSPClient *client)
+{
+	struct pollfd pofd;
+	int ret;
+	int fd = client->fd;
+	int recv_ret;
+	char _packet[1];
+	int content_length = 0;
+	int head_lenght = -1;
+	while (1)
+	{
+		memset(&pofd, 0, sizeof(pofd));
+		pofd.fd = client->fd;
+		pofd.events = POLLIN;
+		ret = poll(&pofd, 1, 100);
+		if (ret == 0)
+			continue;
+		if (ret < 0)
+			break;
+		if (POLLIN != (pofd.revents & POLLIN))
+			continue;
+
+		recv_ret = recv(fd, _packet, 1, 0); //不能一下接收完
+		if (recv_ret <= 0)
+		{
+			if (recv_ret < 0 && (errno == EAGAIN || errno == EINTR))
+				continue;
+			printf("接收错误 close\n");
+			return -1;
+			break;
+		}
+		ret = databuff_write(client->buff_rtsp, _packet, 1);
+		if (ret == -1)
+			return -1;
+
+		if (head_lenght == -1)
+		{
+			head_lenght = string_http_heard_getlength(client->buff_rtsp->data, client->buff_rtsp->wpos);
+			if (head_lenght != -1)
+				content_length = string_http_head_get_content_length(client->buff_rtsp->data, head_lenght);
+			if (content_length == -1)
+				content_length = 0;
+		}
+		if (head_lenght != -1)
+		{
+			if (content_length + head_lenght == client->buff_rtsp->wpos)
+			{
+				client->buff_rtsp->data[client->buff_rtsp->wpos] = 0;
+				printf("<<<<<<<<<\n%s", client->buff_rtsp->data);
+				char pref[10];
+				int code = -1;
+				ret = sscanf(client->buff_rtsp->data, "%[^ ] %d ", pref, &code);
+				return code;
+			}
+		}
+	}
+	return -1;
+}
+
+int RTSPClient_RTSPRecv(RTSPClient *client)
+{
+	int loop = 1;
+	struct pollfd pofd;
+	int ret;
+	int fd = client->fd;
+
+	char _packet_head[4];
+	int rflag = 0;
+	int recv_ret = 0;
+	int pos = 0;
+
+	uint8_t RTSPIF_Channel = 0; //1Byte
+	uint16_t RTSPIF_len = 0;	//65535 2Byte
+
+	while (loop)
+	{
+		memset(&pofd, 0, sizeof(pofd));
+		pofd.fd = client->fd;
+		pofd.events = POLLIN;
+		ret = poll(&pofd, 1, 100);
+		if (ret == 0)
+			continue;
+		if (ret < 0)
+			break;
+		if (POLLIN != (pofd.revents & POLLIN))
+			continue;
+
+		if (rflag == 0)
+		{
+			recv_ret = recv(fd, _packet_head + pos, 1, 0); //不能一下接收完
+			if (recv_ret <= 0)
+			{
+				if (recv_ret < 0 && (errno == EAGAIN || errno == EINTR))
+					continue;
+
+				printf("接收错误\n");
+				return -1;
+				break;
+			}
+			pos++;
+			if (pos == 4)
+			{
+				pos = 0;
+				if (memcmp(_packet_head, "RTSP", 4) == 0)
+				{ //RTSP resp message
+					rflag = 1;
+					databuff_clear(client->buff_rtsp);
+					databuff_write(client->buff_rtsp, _packet_head, 4);
+					return _RTSPClient_RecvRTSPTextMsg(client);
+					continue;
+				}
+				else if (_packet_head[0] == '$')
+				{ //RTSPIF
+					rflag = 2;
+					RTSPIF_Channel = _packet_head[1];
+					memcpy(&RTSPIF_len, _packet_head + 2, 2);
+					RTSPIF_len = ntohs(RTSPIF_len);
+					//还需要接收RTSPIF_len个数据长度
+					//RTCP or RTP
+					printf("RTSP Interleaved Frame, magic:%c channel:%d len:%d\n",
+								_packet_head[0],
+								RTSPIF_Channel,
+								RTSPIF_len);
+
+					if (RTSPIF_len > client->buff_rtcp_rtp->size)
+					{
+						printf("RTP Data len(%d) > buff size(%d)\n", RTSPIF_len, client->buff_rtcp_rtp->size);
+					}
+					continue;
+				}
+				else
+				{
+					printf("未知内容\n");
+					loop = 0;
+					break;
+				}
+
+			} // pos==4
+		}
+
+//		if (rflag == 1)
+//		{											 //RTSP HTTP Response 消息接收
+//			recv_ret = recv(fd, _packet_head, 1, 0); //不能一下接收完
+//			if (recv_ret <= 0)
+//			{
+//				if (recv_ret < 0 && (errno == EAGAIN || errno == EINTR))
+//					continue;
+//				printf("接收错误\n");
+//				return -1;
+//				break;
+//			}
+//			databuff_write(client->buff_rtsp, _packet_head, 1);
+//
+//			if (head_lenght == -1)
+//			{
+//				head_lenght = string_http_heard_getlength(client->buff_rtsp->data, client->buff_rtsp->wpos);
+//				if (head_lenght != -1)
+//					content_length = string_http_head_get_content_length(client->buff_rtsp->data, head_lenght);
+//				if (content_length == -1)
+//					content_length = 0;
+//			}
+//			if (head_lenght != -1)
+//			{
+//				if (content_length + head_lenght == client->buff_rtsp->wpos)
+//				{
+//					client->buff_rtsp->data[client->buff_rtsp->wpos] = 0;
+//					printf("<<<<<<<<<\n%s", client->buff_rtsp->data);
+//					return 0;
+//				}
+//			}
+//		}
+
+		if (rflag == 2)
+		{ //RTSPIF 内容
+			recv_ret = recv(fd, client->buff_rtcp_rtp->data + client->buff_rtcp_rtp->wpos,
+						RTSPIF_len - client->buff_rtcp_rtp->wpos, 0); //不能一下接收完
+			if (recv_ret <= 0)
+			{
+				if (recv_ret < 0 && (errno == EAGAIN || errno == EINTR))
+				{
+					continue;
+				}
+				printf("接收错误\n");
+				return -1;
+				break;
+			}
+			client->buff_rtcp_rtp->wpos += recv_ret;
+			if (client->buff_rtcp_rtp->wpos == recv_ret)
+			{
+				printf("RTSPIF end\n");
+				if (client->callbk_rtp)
+					client->callbk_rtp(client, RTSPIF_Channel, RTSPIF_len, client->buff_rtcp_rtp->data);
+				databuff_clear(client->buff_rtcp_rtp);
+				rflag = 0;
+			}
+		}
+		///
+	}
+	return 0;
+}
+
+int RTSPClient_StreamRecv(RTSPClient *client)
 {
 	//与SETUP有关
 	//RTP和RTCP数据会以$符号＋1个字节的通道编号＋2个字节的数据长度，共4个字节的前缀开始
@@ -1151,8 +1453,14 @@ int RTSPStream_Recv(RTSPClient *client)
 	int pos = 0;
 	time_t time_old = time(NULL);
 
-	FILE *fp = fopen("test.h264", "wb");
+	FILE *fp = NULL;
 	int loop = 1;
+
+	int outfd = open("channel", O_WRONLY);
+
+	//fp = fopen("test.h264", "wb");
+	//fileno(fp);
+	fp=fdopen(outfd, "wb");
 	while (loop)
 	{
 		memset(&pofds, 0, sizeof(pofds));
@@ -1193,16 +1501,15 @@ int RTSPStream_Recv(RTSPClient *client)
 				if (memcmp(buff, "RTSP", 4) == 0)
 				{
 					//RTSP response
-					char *response_text = NULL;
-					size_t textlen = 0;
 					int rtsp_code = 0;
 					printf("recv rtsp response....\n");
-					rtsp_code = rtsp_response_recv(client->fd, &response_text, &textlen);
-					if (response_text)
-						free(response_text);
+					//rtsp_code = rtsp_response_recv(client->fd, &response_text, &textlen);
+					databuff_clear(client->buff_rtsp);
+					databuff_write(client->buff_rtsp, buff, 4);
+					rtsp_code = _RTSPClient_RecvRTSPTextMsg(client);
 					if (rtsp_code != 200)
 					{
-						printf("auth err\n");
+						printf(" err\n");
 						loop = 0;
 						break;
 					}
@@ -1275,12 +1582,12 @@ int RTSPStream_Recv(RTSPClient *client)
 						//如果NALU数据＞1500，使用分片发送：（分三种情况设备：第一次RTP，中间的RTP，最后一次RTP）
 						uint8_t *h264_packet = buff + sizeof(rtp_hdr);
 						NALU_HEADER *nalu_hdr = NULL;
-						nalu_hdr = (NALU_HEADER*) &buff[12];
+						nalu_hdr = (NALU_HEADER *) &buff[12];
 
 						static char nal[4] =
 									{ 00, 00, 00, 01 };
 
-						if (nalu_hdr->TYPE > 0 && nalu_hdr->TYPE < 24)  //单包
+						if (nalu_hdr->TYPE > 0 && nalu_hdr->TYPE < 24) //单包
 						{
 							printf("单包:%d\n", nalu_hdr->TYPE);
 							switch (nalu_hdr->TYPE)
@@ -1297,11 +1604,10 @@ int RTSPStream_Recv(RTSPClient *client)
 								break;
 							}
 						}
-						else if (nalu_hdr->TYPE == 24)  //STAP-A   单一时间的组合包
+						else if (nalu_hdr->TYPE == 24) //STAP-A   单一时间的组合包
 						{
-
 						}
-						else if (nalu_hdr->TYPE == 28)                    //FU-A分片包，解码顺序和传输顺序相同
+						else if (nalu_hdr->TYPE == 28) //FU-A分片包，解码顺序和传输顺序相同
 						{
 							FU_INDICATOR *fu_ind = (FU_INDICATOR *) &buff[12];
 							FU_HEADER *fu_hdr = (FU_HEADER *) &buff[13];
@@ -1318,10 +1624,9 @@ int RTSPStream_Recv(RTSPClient *client)
 								if (fp)
 									fwrite(buff + 14, 1, len - 14, fp); //写NAL数据
 							}
-							else
-							if (rtp_hdr._base.info.M == 0)  //分片包 但不是最后一个包
+							else if (rtp_hdr._base.info.M == 0) //分片包 但不是最后一个包
 							{
-								if (fu_hdr->S == 1)  //分片的第一个包
+								if (fu_hdr->S == 1) //分片的第一个包
 								{
 									unsigned char F;
 									unsigned char NRI;
@@ -1338,11 +1643,11 @@ int RTSPStream_Recv(RTSPClient *client)
 									if (fp)
 									{
 										fwrite(nal, 4, 1, fp);
-										fwrite(&nh, 1, 1, fp);									//写NAL HEADER
+										fwrite(&nh, 1, 1, fp);				//写NAL HEADER
 										fwrite(buff + 14, 1, len - 14, fp); //写NAL数据
 									}
 								}
-								else   //如果不是第一个包
+								else //如果不是第一个包
 								{
 									printf("当前包为FU-A分片包\n");
 									if (fp)
@@ -1378,9 +1683,10 @@ void urldecode_test(const char *url)
 int main(int argc, char **argv)
 {
 	const char *url = "rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
-	//url = "rtsp://admin:admin@192.168.0.88:554/profile1";
-	//rtsp://admin:admin@192.168.0.121:554/profile1
-	//rtsp://admin:admin@192.168.0.161:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
+//	url = "rtsp://192.168.0.12:8880/hg_base.h264";
+//url = "rtsp://admin:admin@192.168.0.88:554/profile1";
+//rtsp://admin:admin@192.168.0.121:554/profile1
+//rtsp://admin:admin@192.168.0.161:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
 #if 0
 	urldecode_test("rtsp://admin:admin@11@192.168.0.150:554/paht1");
 	urldecode_test("rtsp://admin:@192.168.0.150:554/paht1");
@@ -1391,7 +1697,8 @@ int main(int argc, char **argv)
 #endif
 	RTSPClient *client = RTSPClient_open(url);
 	//开始接收视频流,
-	RTSPStream_Recv(client);
+	if (client)
+		RTSPClient_StreamRecv(client);
 	printf("exit\n");
 	return 0;
 }
