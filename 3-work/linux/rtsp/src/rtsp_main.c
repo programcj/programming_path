@@ -1438,20 +1438,28 @@ int RTSPClient_RTSPRecv(RTSPClient *client)
 	return 0;
 }
 
-int fwrite_nal(FILE *fp, uint8_t nal_type)
+int fwrite_nal_split(FILE *fp, uint8_t nal_type)
 {
+	static char nal_4[4] =
+				{ 00, 00, 00, 01 };
+	static char nal_3[3] =
+				{ 00, 00, 01 };
+
 	NALU_HEADER *nalu_hdr = NULL;
 	nalu_hdr = (NALU_HEADER *) &nal_type;
 	switch (nalu_hdr->TYPE)
 	{
+		case NALU_TYPE_SEI:
+		case NALU_TYPE_IDR:
+			if (fp)
+				fwrite(nal_3, 3, 1, fp);
+		break;
 		case NALU_TYPE_SPS:
 			case NALU_TYPE_PPS:
 			case NALU_TYPE_SLICE:
 			default:
 			if (fp)
-			{
-
-			}
+				fwrite(nal_4, 4, 1, fp);
 	}
 	return 0;
 }
@@ -1638,29 +1646,11 @@ int RTSPClient_StreamRecv(RTSPClient *client)
 						NALU_HEADER *nalu_hdr = NULL;
 						nalu_hdr = (NALU_HEADER *) &buff[12];
 
-						static char nal_4[4] =
-									{ 00, 00, 00, 01 };
-						static char nal_3[3] =
-									{ 00, 00, 01 };
-
 						if (nalu_hdr->TYPE > 0 && nalu_hdr->TYPE < 24) //单包
 						{
 							printf("单包:%d\n", nalu_hdr->TYPE);
-							fwrite_nal(fp, buff[12]);
-
-							switch (nalu_hdr->TYPE)
-							{
-								case NALU_TYPE_SPS:
-									case NALU_TYPE_PPS:
-									case NALU_TYPE_SLICE:
-									default:
-									if (fp)
-									{
-										fwrite(nal_4, 4, 1, fp);
-										fwrite(h264_packet, 1, RTSPIF_len - sizeof(rtp_hdr), fp);
-									}
-								break;
-							}
+							fwrite_nal_split(fp, buff[12]);
+							fwrite(h264_packet, 1, RTSPIF_len - sizeof(rtp_hdr), fp);
 						}
 						else if (nalu_hdr->TYPE == 24) //STAP-A   单一时间的组合包
 						{
@@ -1698,9 +1688,10 @@ int RTSPClient_StreamRecv(RTSPClient *client)
 									nh = F | NRI | TYPE;
 
 									printf("当前包为FU-A分片包第一个包: type=%d\n", TYPE); //写NAL
+									fwrite_nal_split(fp, nh);
 									if (fp)
 									{
-										fwrite(nal_3, 3, 1, fp);
+										//fwrite(nal_3, 3, 1, fp);
 										fwrite(&nh, 1, 1, fp);				//写NAL HEADER
 										fwrite(buff + 14, 1, RTSPIF_len - 14, fp); //写NAL数据
 									}
