@@ -16,6 +16,8 @@
  * 
  * 请注意编码格式
  */
+#include <inttypes.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +36,16 @@
 #include "sps_decode.h"
 
 #define DEBUG 1
+
+uint64_t os_time_ms()
+{
+	struct timespec times =
+				{ 0, 0 };
+	uint64_t time;
+	clock_gettime(CLOCK_MONOTONIC, &times);
+	time = times.tv_sec * 1000 + times.tv_nsec / 1000000;
+	return time;
+}
 
 struct databuff
 {
@@ -347,6 +359,13 @@ typedef struct _RTSPClient
 	struct databuff *buff_rtsp;
 	struct databuff *buff_rtcp_rtp;
 	void (*callbk_rtp)(struct _RTSPClient *client, int channel, int len, uint8_t *data);
+
+	int width;
+	int height;
+
+	uint64_t time_open_start;  //开始打开时间 ms
+	uint64_t time_iframe_first; //I帧首次出现时间 ms
+
 } RTSPClient;
 
 int urldecode(const char *url, struct URLInfo *urlinfo)
@@ -433,7 +452,10 @@ const char *urlpathptr(const char *url)
 		return NULL;
 	const char *ptr = strstr(url, "://");
 	if (NULL == ptr)
-		return NULL;
+	{
+		ptr = strstr(url, "/");
+		return ptr;
+	}
 	ptr += 3;
 
 	const char *pspilt = strchr(ptr, '/');
@@ -647,6 +669,7 @@ int rtsp_DESCRIBE_base(RTSPClient *client)
 	if (strlen(urlinfo->Authorization) > 0)
 		ptr += sprintf(ptr, "%s", urlinfo->Authorization);
 	ptr += sprintf(ptr, "User-Agent: %s\r\n", client->UserAgent);
+	ptr += sprintf(ptr, "Accept: application/sdp\r\n");
 	ptr += sprintf(ptr, "\r\n");
 	ret = socket_send_text(fd, buff);
 	if (ret < 0)
@@ -710,6 +733,17 @@ int rtsp_DESCRIBE_base(RTSPClient *client)
 				client->baseURL = baseUrl;
 			}
 		}
+//		else
+//		{
+//			int baseURL_len = strlen(client->urlinfo.path) + 2;
+//			char *baseUrl = (char *) calloc(baseURL_len, 1);
+//			strncpy(baseUrl, client->urlinfo.path, baseURL_len - 2);
+//			int len=strlen(baseUrl);
+//			if(len==0 || baseUrl[len-1]!='/')
+//				strcat(baseUrl, "/");
+//			client->baseURL = baseUrl;
+//		}
+		printf("baseURL:%s\n", client->baseURL);
 		printf("--------SDP数据----------\n%s", client->buff_rtsp->data + head_len);
 		//m: media descriptions
 		//a: attributes
@@ -911,9 +945,16 @@ int rtsp_SETUP(RTSPClient *client)
 	const char *urlbase_path = urlpathptr(client->baseURL);
 	if (urlbase_path == NULL)
 		urlbase_path = urlinfo->path;
-	snprintf(url, sizeof(url), "%s%s:%d%s%s", urlinfo->prefix, urlinfo->host,
+	char *pathsplit = "";
+	if (strlen(urlbase_path) > 0 && (urlbase_path[strlen(urlbase_path) - 1] != '/'))
+	{
+		//需要增加/
+		pathsplit = "/";
+	}
+	snprintf(url, sizeof(url), "%s%s:%d%s%s%s", urlinfo->prefix, urlinfo->host,
 				urlinfo->port,
 				urlbase_path,
+				pathsplit,
 				client->sdpinfo.media_video_attr_control);
 
 	ptr += sprintf(ptr, "SETUP %s RTSP/1.0\r\n", url);
@@ -1076,7 +1117,7 @@ RTSPClient *RTSPClient_open(const char *url)
 		return NULL;
 	client->buff_rtsp = databuff_new(2048);
 	client->buff_rtcp_rtp = databuff_new(1024 * 200); //max 65535
-
+	client->time_open_start = os_time_ms();
 	strcpy(client->UserAgent, "CJRTSPClientV1.0");
 	client->url = strdup(url);
 	urldecode(client->url, &client->urlinfo);
@@ -1147,7 +1188,6 @@ void RTSPClient_close(RTSPClient *client)
  *  timestamp: 32 bits
  *  SSRC: 32 bits
  *  CSRC list: 0 to 15 items, 32 bits each
- *
  */
 struct rtp_pkt_header
 {
@@ -1157,8 +1197,8 @@ struct rtp_pkt_header
 		struct info
 		{
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-			uint8_t CC :4;
-			uint8_t x :1;
+			uint8_t cc :4;
+			uint8_t x :1; //ex
 			uint8_t p :1;
 			uint8_t v :2;
 
@@ -1450,7 +1490,7 @@ int fwrite_nal_split(FILE *fp, uint8_t nal_type)
 	switch (nalu_hdr->TYPE)
 	{
 		case NALU_TYPE_SEI:
-		case NALU_TYPE_IDR:
+			case NALU_TYPE_IDR:
 			if (fp)
 				fwrite(nal_3, 3, 1, fp);
 		break;
@@ -1491,11 +1531,15 @@ int RTSPClient_StreamRecv(RTSPClient *client)
 	int loop = 1;
 
 	printf("视频流接收中哦....\n");
-	//int outfd = open("channel", O_WRONLY);
-	//fp = fdopen(outfd, "wb");
 
+#if 0
+	int outfd = open("channel", O_WRONLY);
+	fp = fdopen(outfd, "wb");
+#endif
+
+#if 1
 	fp = fopen("test.h264", "wb");
-//	fileno(fp);
+#endif
 
 	while (loop)
 	{
@@ -1508,6 +1552,7 @@ int RTSPClient_StreamRecv(RTSPClient *client)
 			printf("poll err\n");
 			break;
 		}
+
 		if (ret == 0)
 		{
 			printf("timeout \n");
@@ -1625,9 +1670,18 @@ int RTSPClient_StreamRecv(RTSPClient *client)
 					if (RTSPIF_Channel == 0) //RTP 头
 					{
 						struct rtp_pkt_header rtp_hdr;
-						char *buff = client->buff_rtcp_rtp->data;
-						memcpy(&rtp_hdr, buff, sizeof(rtp_hdr));
-						printf("RTP V=%d ", rtp_hdr._base.info.v);
+						char *buffptr = client->buff_rtcp_rtp->data;
+						int bufflen = RTSPIF_len;
+
+						memcpy(&rtp_hdr, buffptr, sizeof(rtp_hdr));
+						buffptr += sizeof(rtp_hdr);
+						RTSPIF_len -= sizeof(rtp_hdr);
+						printf("RTP V=%d Padding:%d Extension:%d CC:%d ",
+									rtp_hdr._base.info.v,
+									rtp_hdr._base.info.p,
+									rtp_hdr._base.info.x,
+									rtp_hdr._base.info.cc);
+
 						printf("PT=%d ", rtp_hdr._base.info.PT);
 						printf("seq:%u ", rtp_hdr.seqnum);
 						printf("timestamp:%u ", rtp_hdr.timestamp);
@@ -1635,42 +1689,95 @@ int RTSPClient_StreamRecv(RTSPClient *client)
 						//exit(0);
 						if (rtp_hdr._base.info.PT != 96)
 						{
-							//H264
 							printf("非H264包\n");
 							continue;
 						}
 
+						if (rtp_hdr._base.info.x)
+						{ //有扩展头
+							unsigned short rtp_ex_profile = 0;
+							int rtp_ex_length = 0;
+							uint32_t header;
+
+							memcpy(&rtp_ex_profile, buffptr, 2);
+							buffptr += 2;
+							memcpy(&rtp_ex_length, buffptr, 2);
+							buffptr += 2;
+							RTSPIF_len -= 4;
+							rtp_ex_profile = ntohs(rtp_ex_profile);
+							rtp_ex_length = ntohs(rtp_ex_length);
+
+							printf("扩展: %04X len:%d ", rtp_ex_profile, rtp_ex_length);
+							int ll = 0;
+							for (ll = 0; ll < rtp_ex_length; ll++)
+							{
+								memcpy(&header, buffptr, 4);
+								header = ntohl(header);
+								printf("header:%08X ", header);
+								buffptr += 4;
+								RTSPIF_len -= 4;
+							}
+						}
+
 						//如果UALU数据＜1500（自己设定），使用单一包发送：
 						//如果NALU数据＞1500，使用分片发送：（分三种情况设备：第一次RTP，中间的RTP，最后一次RTP）
-						uint8_t *h264_packet = buff + sizeof(rtp_hdr);
-						NALU_HEADER *nalu_hdr = NULL;
-						nalu_hdr = (NALU_HEADER *) &buff[12];
+						uint8_t *h264_packet = buffptr;
+						int h264_packet_len = RTSPIF_len;
+
+						NALU_HEADER *nalu_hdr = (NALU_HEADER *) h264_packet;
 
 						if (nalu_hdr->TYPE > 0 && nalu_hdr->TYPE < 24) //单包
 						{
 							printf("单包:%d\n", nalu_hdr->TYPE);
-							fwrite_nal_split(fp, buff[12]);
-							fwrite(h264_packet, 1, RTSPIF_len - sizeof(rtp_hdr), fp);
+							switch (nalu_hdr->TYPE)
+							{
+								case NALU_TYPE_SPS:
+									{
+									int width;
+									int height;
+									int fps;
+									h264_decode_sps(h264_packet, h264_packet_len, &width, &height, &fps);
+									printf("SPS %dx%d %d fps\n", width, height, fps);
+									if (client->time_iframe_first == 0)
+									{
+										client->time_iframe_first = os_time_ms();
+										printf("use time: %"PRIu64"s\n", (client->time_iframe_first - client->time_open_start) / 1000);
+										//exit(1);
+									}
+								}
+								break;
+								case NALU_TYPE_PPS:
+									printf("PPS\n");
+								break;
+							}
+							if (fp)
+							{
+								fwrite_nal_split(fp, *buffptr);
+								fwrite(h264_packet, 1, h264_packet_len, fp);
+							}
 						}
-						else if (nalu_hdr->TYPE == 24) //STAP-A   单一时间的组合包
+						else if (nalu_hdr->TYPE == 24) //STAP-A 单一时间的组合包
 						{
+							printf("STAP-A 单一时间的组合包\n");
 						}
 						else if (nalu_hdr->TYPE == 28) //FU-A分片包，解码顺序和传输顺序相同
 						{
-							FU_INDICATOR *fu_ind = (FU_INDICATOR *) &buff[12];
-							FU_HEADER *fu_hdr = (FU_HEADER *) &buff[13];
-							printf("FU_INDICATOR->F     :%d\n", fu_ind->F);
-							printf("FU_INDICATOR->NRI   :%d\n", fu_ind->NRI);
-							printf("FU_INDICATOR->TYPE  :%d\n", fu_ind->TYPE);
-							printf("FU_HEADER->S        :%d\n", fu_hdr->S);
-							printf("FU_HEADER->E        :%d\n", fu_hdr->E);
-							printf("FU_HEADER->R        :%d\n", fu_hdr->R);
-							printf("FU_HEADER->TYPE     :%d\n", fu_hdr->TYPE);
+							FU_INDICATOR *fu_ind = (FU_INDICATOR *) h264_packet;
+							FU_HEADER *fu_hdr = (FU_HEADER *) (h264_packet + 1);
+							h264_packet += 2;
+							h264_packet_len -= 2;
+//							printf("FU_INDICATOR->F     :%d\n", fu_ind->F);
+//							printf("FU_INDICATOR->NRI   :%d\n", fu_ind->NRI);
+//							printf("FU_INDICATOR->TYPE  :%d\n", fu_ind->TYPE);
+//							printf("FU_HEADER->S        :%d\n", fu_hdr->S);
+//							printf("FU_HEADER->E        :%d\n", fu_hdr->E);
+//							printf("FU_HEADER->R        :%d\n", fu_hdr->R);
+//							printf("FU_HEADER->TYPE     :%d\n", fu_hdr->TYPE);
 
 							if (rtp_hdr._base.info.M == 1) //分片包最后一个包
 							{
 								if (fp)
-									fwrite(buff + 14, 1, RTSPIF_len - 14, fp); //写NAL数据
+									fwrite(h264_packet, 1, h264_packet_len, fp); //写NAL数据
 							}
 							else if (rtp_hdr._base.info.M == 0) //分片包 但不是最后一个包
 							{
@@ -1687,20 +1794,37 @@ int RTSPClient_StreamRecv(RTSPClient *client)
 									//nh = n->forbidden_bit|n->nal_reference_idc|n->nal_unit_type;  //二进制文件也是按 大字节序存储
 									nh = F | NRI | TYPE;
 
+									switch (TYPE)
+									{
+										case NALU_TYPE_SPS:
+											{
+											printf("SPS\n");
+											if (client->time_iframe_first == 0)
+											{
+												client->time_iframe_first = os_time_ms();
+												printf("use time: %"PRIu64"s\n", (client->time_iframe_first - client->time_open_start) / 1000);
+												//exit(1);
+											}
+										}
+										break;
+										case NALU_TYPE_PPS:
+											printf("PPS\n");
+										break;
+									}
 									printf("当前包为FU-A分片包第一个包: type=%d\n", TYPE); //写NAL
 									fwrite_nal_split(fp, nh);
 									if (fp)
 									{
 										//fwrite(nal_3, 3, 1, fp);
 										fwrite(&nh, 1, 1, fp);				//写NAL HEADER
-										fwrite(buff + 14, 1, RTSPIF_len - 14, fp); //写NAL数据
+										fwrite(h264_packet, 1, h264_packet_len, fp); //写NAL数据
 									}
 								}
 								else //如果不是第一个包
 								{
 									printf("当前包为FU-A分片包\n");
 									if (fp)
-										fwrite(buff + 14, RTSPIF_len - 14, 1, fp);
+										fwrite(h264_packet, h264_packet_len, 1, fp);
 								}
 							}
 						}
@@ -1730,7 +1854,8 @@ int main(int argc, char **argv)
 {
 	const char *url = "rtsp://admin:admin@192.168.0.150:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif";
 	url = "rtsp://192.168.0.12:8880/hg_base.h264";
-//	url = "rtsp://admin:admin@192.168.0.88:554/profile1";
+	url = "rtsp://admin:admin@192.168.0.88:554/profile1";
+	url = "rtsp://192.168.0.27:554/sip/44030500001320190006";
 	if (argc > 1)
 		url = argv[1];
 	printf("url:%s\n", url);
