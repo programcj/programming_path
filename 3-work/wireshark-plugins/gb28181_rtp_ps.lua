@@ -44,8 +44,16 @@ foo_proto.fields = {
 ----------------------------------------------
 local ps_proto = Proto("rtp-ps", "GB28181 RTP PS Protolcol")
 
+-- 第一个参数是过滤器过滤中显示的字段
+-- 第二个参数是协议解析时显示的字段
+-- 第三个参数是解析成number时显示的格式，十进制显示还是16进制显示
+-- 第四个参数是解析出的结果，通过table转换成对应的值，如果不需要转换，则置为nil
+-- 第五个参数是会将待解析的入参进行与操作，取对应的bit位进行后续的解析。当一个字节中存在多个字段解析时是必要的
+
 local ps_ps_head = ProtoField.uint32("ps.head", "PS head", base.HEX_DEC)
 local ps_sh_head = ProtoField.uint32("sh.head", "SH head", base.HEX_DEC)
+
+local ps_ps_lenght=ProtoField.uint8("ps.length", "length", base.DEC, nil, 0x07)
 
 local ps_sh_length=ProtoField.uint16("sh.length", "SH length", base.DEC)
 local ps_psm_head=ProtoField.uint32("psm.head", "psm head", base.HEX_DEC)
@@ -59,6 +67,7 @@ local ps_data=ProtoField.bytes("rptps.data","Data")
 
 ps_proto.fields= {
 	ps_ps_head,
+	ps_ps_lenght,
 	ps_sh_head,
 	ps_sh_length,	
 	ps_psm_head,
@@ -94,7 +103,11 @@ function ps_proto.dissector(buf, pinfo, treeitem)
 	
 	if headid==0x0001BA then
 		foo_tree:add(ps_ps_head, buf(0,4))
-		offset=14
+		foo_tree:add(buf(4,1),"unit:" .. buf(4,1):uint())
+
+		foo_tree:add(ps_ps_lenght, buf(13,1))
+		
+		offset=14+buf(13,1):bitfield(5,3)
 		
 		info="ps"
 		
@@ -138,12 +151,29 @@ function ps_proto.dissector(buf, pinfo, treeitem)
 				---------------------------------
 		elseif headid== 0x000001E0 or headid==0x000001C0 then	
 					
-					local tree_pes=foo_tree:add(ps_pes_head, buf(offset,4))
-					offset=offset+4
-					pes_packet_length = buf(offset,2):uint()
-					tree_pes:add(PES_packet_length, buf(offset,2))
-					
-					info=info .. ",pes" .. "(" .. pes_packet_length .. ")"			
+			local tree_pes=foo_tree:add(ps_pes_head, buf(offset,4))
+
+			foo_tree:add(buf(offset+3,1), "PS ID:" .. buf(offset+3,1):uint())
+			offset=offset+4
+
+			pes_packet_length = buf(offset,2):uint()
+			tree_pes:add(PES_packet_length, buf(offset,2))
+			offset=offset+2		
+			foo_tree:add(buf(offset,2), "PES:" .. buf(offset,2):uint())
+			offset=offset+2
+			
+			peslen=buf(offset,1):uint()
+			foo_tree:add(buf(offset,1), "PES Len:" .. peslen)
+			offset=offset+1
+			foo_tree:add(buf(offset,peslen), "PES Ex:")
+
+			videolen=pes_packet_length-peslen-3
+
+			offset=offset+peslen	
+
+			foo_tree:add(ps_data, buf(offset, videolen))
+
+			info=info .. ",pes" .. "(" .. pes_packet_length .. ")"			
 		else		
 				info = "data"		
 				foo_tree:add(ps_data, buf(0, buf:len()))
@@ -232,9 +262,9 @@ local rtp_ps_port = Proto("call-rtp-ps","call rtp ps")
 
 function rtp_ps_port.dissector(buffer, pinfo, tree)
  	local fields = { all_field_infos() }
-		local websocket_flag = false
+	local websocket_flag = false
 		
-        for i, finfo in ipairs(fields) do
+    for i, finfo in ipairs(fields) do
         		
         	-- print("name:" .. finfo.name)
         		
@@ -272,4 +302,3 @@ for _,name in ipairs(dt) do
     print(name)
 end
 --]]
-]]
