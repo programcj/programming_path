@@ -20,62 +20,59 @@
 #ifndef RTMP_H264_H_
 #define RTMP_H264_H_
 
-//H264定义的类型 values for nal_unit_type
-enum
-{
-	NALU_TYPE_SLICE = 1,
-	NALU_TYPE_DPA = 2,
-	NALU_TYPE_DPB = 3,
-	NALU_TYPE_DPC = 4,
-	NALU_TYPE_IDR = 5,
-	NALU_TYPE_SEI = 6,
-	NALU_TYPE_SPS = 7,
-	NALU_TYPE_PPS = 8,
-	NALU_TYPE_AUD = 9,
-	NALU_TYPE_EOSEQ = 10,
-	NALU_TYPE_EOSTREAM = 11,
-	NALU_TYPE_FILL = 12
-};
+#include <stdint.h>
+#include "H264.h"
+#include "../librtmp/rtmp.h"
 
-typedef struct t_h264_nalu_header
-{
-	//小端模式哦(反的)
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-	unsigned char nal_unit_type :5;
-	unsigned char nal_reference_idc :2;
-	unsigned char forbidden_bit :1;
-#endif
-
-} H264_NALU_HEADER;
-
-#include "rtmp.h"
+#define NONE                 "\e[0m"
+#define BLACK                "\e[0;30m"
+#define RED                  "\e[0;31m"
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-#include <stdint.h>
-
 // nal_head_pos : NAL头的位置
 // nal_len : NAL长度,从头位置开始
 int H264_NALFindPos(uint8_t *data, int size, int *pnal_head_pos, int *pnal_len);
 
-int RTMP_ChangeChunkSize(RTMP *r,int outChunkSize);
+struct RTMPStreamOut
+{
+	char url[300];
+	RTMP *rtmp;
+	int isopen;
 
-int RTMP_SendMetaData(RTMP *rtmp, int width, int height, int fps);
+	struct media_data
+	{
+		unsigned char *pps;
+		unsigned char *sps;
+		unsigned char *vps;
 
-//发送SPS PPS
-int RTMP_SendVideoSpsPps(RTMP *rtmp,
-			uint32_t timestamp,
-			unsigned char *sps, int sps_len,
-			unsigned char *pps, int pps_len);
+		int pps_len;
+		int sps_len;
+		int vps_len;
 
-//发送H264数据
-int RTMP_H264SendPacket(RTMP *rtmp,
-			unsigned char *data, unsigned int size,
-			int bIsKeyFrame,
-			unsigned int nTimeStamp);
+		int width;
+		int height;
+		int fps;
+		int status;
+
+		int nTimeStamp;
+	} mdata;
+
+	int frame_sps_exists;
+};
+
+typedef struct RTMPStreamOut RTMPOut;
+
+int RTMPStreamOut_open(RTMPOut *out, const char *url);
+
+void RTMPStreamOut_close(RTMPOut *out);
+
+int RTMPStreamOut_Send(RTMPOut *out, uint8_t *data, int size, int ms);
+
+int RTMPStreamOut_SendH265(RTMPOut *out, uint8_t *data, int size, int ms);
 
 #ifdef __cplusplus
 }

@@ -71,7 +71,8 @@ UINT Ue(BYTE *pBuff, UINT nLen, UINT *nStartBit)
 	(*nStartBit)++;
 
 	DWORD dwRet = 0;
-	for (UINT i = 0; i < nZeroNum; i++)
+	UINT i;
+	for (i = 0; i < nZeroNum; i++)
 	{
 		dwRet <<= 1;
 		if (pBuff[*nStartBit / 8] & (0x80 >> ((*nStartBit) % 8)))
@@ -96,7 +97,8 @@ int Se(BYTE *pBuff, UINT nLen, UINT *nStartBit)
 DWORD u(UINT BitCount, BYTE * buf, UINT *nStartBit)
 {
 	DWORD dwRet = 0;
-	for (UINT i = 0; i < BitCount; i++)
+	UINT i;
+	for (i = 0; i < BitCount; i++)
 	{
 		dwRet <<= 1;
 		if (buf[*nStartBit / 8] & (0x80 >> (*nStartBit % 8)))
@@ -169,9 +171,10 @@ int h264_decode_sps(BYTE * buf, unsigned int nLen, int *width, int *height, int 
 			int seq_scaling_matrix_present_flag = u(1, buf, &StartBit);
 
 			int seq_scaling_list_present_flag[8];
+			int i;
 			if (seq_scaling_matrix_present_flag)
 			{
-				for (int i = 0; i < 8; i++)
+				for (i = 0; i < 8; i++)
 				{
 					seq_scaling_list_present_flag[i] = u(1, buf, &StartBit);
 				}
@@ -189,9 +192,9 @@ int h264_decode_sps(BYTE * buf, unsigned int nLen, int *width, int *height, int 
 			int offset_for_non_ref_pic = Se(buf, nLen, &StartBit);
 			int offset_for_top_to_bottom_field = Se(buf, nLen, &StartBit);
 			int num_ref_frames_in_pic_order_cnt_cycle = Ue(buf, nLen, &StartBit);
-
+			int i;
 			int *offset_for_ref_frame = (int*) malloc(num_ref_frames_in_pic_order_cnt_cycle * sizeof(int));
-			for (int i = 0; i < num_ref_frames_in_pic_order_cnt_cycle; i++)
+			for (i = 0; i < num_ref_frames_in_pic_order_cnt_cycle; i++)
 				offset_for_ref_frame[i] = Se(buf, nLen, &StartBit);
 			free(offset_for_ref_frame);
 		}
@@ -306,4 +309,160 @@ int h264_decode_sps(BYTE * buf, unsigned int nLen, int *width, int *height, int 
 	}
 	else
 		return -1;
+}
+
+
+//https://github.com/wexiangis/rtsp_to_h264/tree/6826f646306f3458d0a773bcd45a1ca861eff13f
+int h265_decode_sps(unsigned char *buf, unsigned int nLen, int *width, int *height, int *fps)
+{
+
+	unsigned int StartBit = 0;
+	de_emulation_prevention(buf, &nLen);
+
+	//--- nal_uint_header ---
+	int forbidden_zero_bit = u(1, buf, &StartBit);
+	int nal_unit_type = u(6, buf, &StartBit);
+	if (nal_unit_type != 33)
+		return 0;
+	int nuh_layer_id = u(6, buf, &StartBit);
+	int nuh_temporal_id_plus = u(3, buf, &StartBit);
+
+	//--- seq_parameter_set_rbsp ---
+	int sps_video_parameter_set_id = u(4, buf, &StartBit);
+	int sps_max_sub_layers_minus1 = u(3, buf, &StartBit);
+	int sps_temporal_id_nesting_flag = u(1, buf, &StartBit);
+	// printf("sps_video_parameter_set_id/%d\n"
+	//     "sps_max_sub_layers_minus1/%d\n"
+	//     "sps_temporal_id_nesting_flag/%d\n",
+	//     sps_video_parameter_set_id,
+	//     sps_max_sub_layers_minus1,
+	//     sps_temporal_id_nesting_flag);
+	if (sps_temporal_id_nesting_flag) //--- profile_tier_level ---
+	{
+		int general_profile_space = u(2, buf, &StartBit);
+		int general_tier_flag = u(1, buf, &StartBit);
+		int general_profile_idc = u(5, buf, &StartBit);
+		int general_profile_compatibility_flag[32];
+		// printf("general_profile_space/%d\n"
+		//     "general_tier_flag/%d\n"
+		//     "general_profile_idc/%d\n",
+		//     general_profile_space,
+		//     general_tier_flag,
+		//     general_profile_idc);
+		int j;
+		for (j = 0; j < 32; j++)
+		{
+			general_profile_compatibility_flag[j] = u(1, buf, &StartBit);
+			// printf("bit[%d]: %d\n", j, general_profile_compatibility_flag[j]);
+		}
+		int general_progressive_source_flag = u(1, buf, &StartBit);
+		int general_interlaced_source_flag = u(1, buf, &StartBit);
+		int general_non_packed_constraint_flag = u(1, buf, &StartBit);
+		int general_frame_only_constraint_flag = u(1, buf, &StartBit);
+		if (general_profile_idc == 4 || general_profile_compatibility_flag[4] ||
+					general_profile_idc == 5 || general_profile_compatibility_flag[5] ||
+					general_profile_idc == 6 || general_profile_compatibility_flag[6] ||
+					general_profile_idc == 7 || general_profile_compatibility_flag[7] ||
+					general_profile_idc == 8 || general_profile_compatibility_flag[8] ||
+					general_profile_idc == 9 || general_profile_compatibility_flag[9] ||
+					general_profile_idc == 10 || general_profile_compatibility_flag[10])
+		{
+			// printf("> hit 1-1\n");
+			int general_max_12bit_constraint_flag = u(1, buf, &StartBit);
+			int general_max_10bit_constraint_flag = u(1, buf, &StartBit);
+			int general_max_8bit_constraint_flag = u(1, buf, &StartBit);
+			int general_max_422chroma_constraint_flag = u(1, buf, &StartBit);
+			int general_max_420chroma_constraint_flag = u(1, buf, &StartBit);
+			int general_max_monochrome_constraint_flag = u(1, buf, &StartBit);
+			int general_intra_constraint_flag = u(1, buf, &StartBit);
+			int general_one_picture_only_constraint_flag = u(1, buf, &StartBit);
+			int general_lower_bit_rate_constraint_flag = u(1, buf, &StartBit);
+			if (general_profile_idc == 5 || general_profile_compatibility_flag[5] ||
+						general_profile_idc == 9 || general_profile_compatibility_flag[9] ||
+						general_profile_idc == 10 || general_profile_compatibility_flag[10])
+			{
+				int general_max_14bit_constraint_flag = u(1, buf, &StartBit);
+				int general_reserved_zero_33bits = u(33, buf, &StartBit);
+			}
+			else
+			{
+				int general_reserved_zero_34bits = u(34, buf, &StartBit);
+			}
+		}
+		else if (general_profile_idc == 2 || general_profile_compatibility_flag[2])
+		{
+			// printf("> hit 1-2\n");
+			int general_reserved_zero_7bits = u(7, buf, &StartBit);
+			int general_one_picture_only_constraint_flag = u(1, buf, &StartBit);
+			int general_reserved_zero_35bits = u(35, buf, &StartBit);
+		}
+		else
+		{
+			// printf("> hit 1-3\n");
+			int general_reserved_zero_43bits = u(43, buf, &StartBit);
+		}
+		if ((general_profile_idc >= 1 && general_profile_idc <= 5) ||
+					general_profile_idc == 9 ||
+					general_profile_compatibility_flag[1] || general_profile_compatibility_flag[2] ||
+					general_profile_compatibility_flag[3] || general_profile_compatibility_flag[4] ||
+					general_profile_compatibility_flag[5] || general_profile_compatibility_flag[9])
+		{
+			// printf("> hit 2-1\n");
+			int general_inbld_flag = u(1, buf, &StartBit);
+		}
+		else
+		{
+			// printf("> hit 2-2\n");
+			int general_reserved_zero_bit = u(1, buf, &StartBit);
+		}
+		int general_level_idc = u(8, buf, &StartBit);
+		if (sps_max_sub_layers_minus1 > 0)
+		{
+			fprintf(stderr, "error: sps_max_sub_layers_minus1 must 0 (%d)\n",
+						sps_max_sub_layers_minus1);
+			return 0;
+		}
+	}
+	int sps_seq_parameter_set_id = Ue(buf, nLen, &StartBit);
+	int chroma_format_idc = Ue(buf, nLen, &StartBit);
+	if (chroma_format_idc == 3)
+	{
+		int separate_colour_plane_flag = u(1, buf, &StartBit);
+	}
+	int pic_width_in_luma_samples = Ue(buf, nLen, &StartBit);
+	int pic_height_in_luma_samples = Ue(buf, nLen, &StartBit);
+	int conformance_window_flag = u(1, buf, &StartBit);
+
+	int conf_win_left_offset = 0;
+	int conf_win_right_offset = 0;
+	int conf_win_top_offset = 0;
+	int conf_win_bottom_offset = 0;
+	if (conformance_window_flag)
+	{
+		int conf_win_left_offset = Ue(buf, nLen, &StartBit);
+		int conf_win_right_offset = Ue(buf, nLen, &StartBit);
+		int conf_win_top_offset = Ue(buf, nLen, &StartBit);
+		int conf_win_bottom_offset = Ue(buf, nLen, &StartBit);
+	}
+
+	// printf("forbidden_zero_bit/%d,\n"
+	// "nal_unit_type/%d, nuh_layer_id/%d,\n"
+	// "sps_video_parameter_set_id/%d,\n"
+	// "sps_max_sub_layers_minus1/%d,\n"
+	// "sps_temporal_id_nesting_flag/%d\n"
+	// "sps_seq_parameter_set_id/%d\n"
+	// "chroma_format_idc/%d\n",
+	//     forbidden_zero_bit,
+	//     nal_unit_type,
+	//     nuh_layer_id,
+	//     sps_video_parameter_set_id,
+	//     sps_max_sub_layers_minus1,
+	//     sps_temporal_id_nesting_flag,
+	//     sps_seq_parameter_set_id,
+	//     chroma_format_idc);
+
+	*width = pic_width_in_luma_samples - (conf_win_left_offset + conf_win_right_offset);
+	*height = pic_height_in_luma_samples - (conf_win_top_offset + conf_win_bottom_offset);
+	*fps = 0;
+	return 0;
 }

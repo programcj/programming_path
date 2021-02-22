@@ -27,6 +27,8 @@ extern "C"
 
 int h264_decode_sps(unsigned char * buf, unsigned int nLen, int *width, int *height, int *fps);
 
+int h265_decode_sps(unsigned char *buf, unsigned int nLen, int *width, int *height, int *fps);
+
 #ifdef __cplusplus
 }
 #endif
