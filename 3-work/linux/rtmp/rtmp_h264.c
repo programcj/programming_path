@@ -27,9 +27,12 @@
 #include "../librtmp/rtmp.h"
 #include "../librtmp/amf.h"
 
+#define MEDIA_DATA_H264 7
+#define MEDIA_DATA_H265 12
+
 int RTMP_ChangeChunkSize(RTMP *r, int outChunkSize);
 
-int RTMP_SendMetaData(RTMP *rtmp, int width, int height, int fps);
+int RTMP_SendMetaData(RTMP *rtmp, int code_id, int width, int height, int fps);
 
 //发送SPS PPS
 int RTMP_SendVideoSpsPps(RTMP *rtmp,
@@ -181,6 +184,7 @@ int SendPacket(RTMP *rtmp,
 	if (RTMP_IsConnected(rtmp))
 	{
 		nRet = RTMP_SendPacket(rtmp, packet, FALSE); /*TRUE为放进发送队列,FALSE是不放进发送队列,直接发送*/
+		nRet = nRet == 1 ? 0 : -1;
 	}
 	/*释放内存*/
 	free(packet);
@@ -213,7 +217,7 @@ int RTMP_ChangeChunkSize(RTMP *r, int outChunkSize)
 	return RTMP_SendPacket(r, &packet, TRUE);
 }
 
-int RTMP_SendMetaData(RTMP *rtmp, int width, int height, int fps)
+int RTMP_SendMetaData(RTMP *rtmp, int code_id, int width, int height, int fps)
 {
 	RTMPPacket * packet = NULL; //rtmp包结构
 	unsigned char *body = NULL;
@@ -245,12 +249,13 @@ int RTMP_SendMetaData(RTMP *rtmp, int width, int height, int fps)
 	p = put_amf_double(p, height);
 
 //	p = put_amf_string(p, "framerate");
-//	p = put_amf_double(p, fps);
+//	p = put_amf_double(p, 25);
+
 	p = put_amf_string(p, "videodatarate");
 	p = put_amf_double(p, 0);
 
 	p = put_amf_string(p, "videocodecid");
-	p = put_amf_double(p, 7); //FLV_CODECID_H264=7
+	p = put_amf_double(p, code_id); //FLV_CODECID_H264=7
 
 	p = put_amf_string(p, "");
 	p = put_byte(p, AMF_OBJECT_END);
@@ -265,6 +270,7 @@ int RTMP_SendMetaData(RTMP *rtmp, int width, int height, int fps)
 	//printf("m_nBodySize=%d\n", packet->m_nBodySize);
 	/*调用发送接口*/
 	int nRet = RTMP_SendPacket(rtmp, packet, TRUE);
+	nRet = nRet == 1 ? 0 : -1;
 	free(packet);    //释放内存
 	return nRet;
 }
@@ -332,6 +338,7 @@ int RTMP_SendVideoSpsPps(RTMP *rtmp,
 	//printf("sps bps body size:%d\n", i);
 	/*调用发送接口*/
 	int nRet = RTMP_SendPacket(rtmp, packet, TRUE);
+	nRet = nRet == 1 ? 0 : -1;
 	free(packet);    //释放内存
 	return nRet;
 }
@@ -341,9 +348,7 @@ int RTMP_H264SendPacket(RTMP *rtmp, unsigned char *data, unsigned int size,
 			unsigned int nTimeStamp)
 {
 	if (data == NULL && size < 11)
-	{
 		return -1;
-	}
 
 	RTMPPacket *packet = (RTMPPacket *) malloc(RTMP_HEAD_SIZE + size + 9);
 	memset(packet, 0, RTMP_HEAD_SIZE);
@@ -382,12 +387,37 @@ int RTMP_H264SendPacket(RTMP *rtmp, unsigned char *data, unsigned int size,
 	packet->m_nTimeStamp = nTimeStamp & 0xffffff;
 
 	if (RTMP_IsConnected(rtmp))
-		ret = RTMP_SendPacket(rtmp, packet, TRUE);
+	{
+		ret = RTMP_SendPacket(rtmp, packet, TRUE); // return 1 success; -1 err;
+		ret = ret == 1 ? 0 : -1;
+	}
 	free(packet);
 	return ret;
 }
 
-#define BODY_0_H265 0x0D
+#define BODY_0_H265 0x0C
+typedef struct HEVCDecoderConfigurationRecord
+{
+	uint8_t configurationVersion;
+	uint8_t general_profile_space;
+	uint8_t general_tier_flag;
+	uint8_t general_profile_idc;
+	uint32_t general_profile_compatibility_flags;
+	uint64_t general_constraint_indicator_flags;
+	uint8_t general_level_idc;
+	uint16_t min_spatial_segmentation_idc;
+	uint8_t parallelismType;
+	uint8_t chromaFormat;
+	uint8_t bitDepthLumaMinus8;
+	uint8_t bitDepthChromaMinus8;
+	uint16_t avgFrameRate;
+	uint8_t constantFrameRate;
+	uint8_t numTemporalLayers;
+	uint8_t temporalIdNested;
+	uint8_t lengthSizeMinusOne;
+	uint8_t numOfArrays;
+//    HVCCNALUnitArray *array;
+} HEVCDecoderConfigurationRecord;
 
 /**
  * 发送视频的sps和pps、vps信息
@@ -419,45 +449,73 @@ int RTMP_SendVideoSpsPpsVps(RTMP *rtmp,
 	i = 0;
 	body[i++] = 0x10 | BODY_0_H265;
 
-	//  4 | HEVCDecoderConfigurationRecord：（最小长度23字节）
+	//          4 | HEVCDecoderConfigurationRecord：（最小长度23字节）
+	//            | 01 3  4  5  6  8  9  10             17
 	//00 00 00 00 | 01 01 60 00 00 00 b0 00 00 00 00 00 7b f0 00 fc fd f8 f8 00 00 0f 03
 	// SPS:  4201 | 01 01 60 00 00 03 00 b0 00 00 03 00 00 03 00 7b a0 03 c0 80 10 e5 8d ae 49 14 bf 37 01 01 01 00 80
-
+	//        42 01 01 01 60 00 00 00 b0 00 00 00 00 00 5d a0 02 80 80 2d 16 36 b9 24 52 fc dc 04 04 04 02 02 02 02
+	//       0  1    2 3  4  5  6  7  8  9  10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
 	body[i++] = 0x00;	// AVC sequence header   1byte
 	body[i++] = 0x00;	//composition time 3 byte
 	body[i++] = 0x00;
 	body[i++] = 0x00;
 
-	body[i++] = 0x01;	//
+	body[i++] = 0x01;
+	/*
+	 * unsigned int(2) general_profile_space;
+	 * unsigned int(1) general_tier_flag;
+	 * unsigned int(5) general_profile_idc;
+	 */
 	body[i++] = sps[3];
-	body[i++] = sps[4];
+	body[i++] = sps[4]; /* unsigned int(32) general_profile_compatibility_flags; */  //0x60
 	body[i++] = sps[5];
 	body[i++] = sps[6];
+	body[i++] = 00;
 
-	body[i++] = sps[8];
+	body[i++] = sps[8]; /* unsigned int(48) general_constraint_indicator_flags; */
 	body[i++] = sps[9];
 	body[i++] = sps[10];
-
+	body[i++] = 0;
+	body[i++] = 0;
+	body[i++] = 0;
+	body[i++] = sps[17]; /* unsigned int(8) general_level_idc; */
+	/*
+	 * bit(4) reserved = ‘1111’b;
+	 * unsigned int(12) min_spatial_segmentation_idc;
+	 */
+	body[i++] = 0xF0;
+	body[i++] = 0;
+	/*
+	 * bit(6) reserved = ‘111111’b;
+	 * unsigned int(2) parallelismType;
+	 */
+	body[i++] = 0xFC;
+	/*
+	 * bit(6) reserved = ‘111111’b;
+	 * unsigned int(2) chromaFormat;
+	 */
+	body[i++] = 0xFD;
+	/*
+	 * bit(5) reserved = ‘11111’b;
+	 * unsigned int(3) bitDepthLumaMinus8;
+	 */
+	body[i++] = 0xF8;
+	/*
+	 * bit(5) reserved = ‘11111’b;
+	 * unsigned int(3) bitDepthChromaMinus8;
+	 */
+	body[i++] = 0xF8;
+	/* bit(16) avgFrameRate; */
 	body[i++] = 0x00;
 	body[i++] = 0x00;
-	body[i++] = 0x00;
-	body[i++] = 0x00;
-
-	body[i++] = 0x00;
-	body[i++] = 0x00;
-	body[i++] = 0x00;
-
-	body[i++] = 0x00;
-	body[i++] = 0x00;
-	body[i++] = 0x00;
-
-	body[i++] = 0x00;
-	body[i++] = 0x00;
-	body[i++] = 0x00;
-
-	body[i++] = 0x03;	//视频数据nal长度字节数-1，只取低2位
-
-	/* unsigned int(8) numOfArrays; 03 */
+	/*
+	 * bit(2) constantFrameRate;
+	 * bit(3) numTemporalLayers;
+	 * bit(1) temporalIdNested;
+	 * unsigned int(2) lengthSizeMinusOne;
+	 */
+	body[i++] = 0x0F;
+	/* unsigned int(8) numOfArrays; */
 	body[i++] = 0x03;
 
 	// VPS
@@ -479,12 +537,14 @@ int RTMP_SendVideoSpsPpsVps(RTMP *rtmp,
 	i += sps_len;
 
 	// pps
+	pps_len++;
 	body[i++] = 0x22;
 	body[i++] = (1 >> 8) & 0xff;
 	body[i++] = 1 & 0xff;
 	body[i++] = (pps_len >> 8) & 0xff;
 	body[i++] = (pps_len) & 0xff;
-	memcpy(&body[i], pps, pps_len);
+	memcpy(&body[i], pps, pps_len - 1);
+	body[i + pps_len - 1] = 0;
 	i += pps_len;
 
 	packet->m_packetType = RTMP_PACKET_TYPE_VIDEO;
@@ -495,15 +555,16 @@ int RTMP_SendVideoSpsPpsVps(RTMP *rtmp,
 	packet->m_headerType = RTMP_PACKET_SIZE_MEDIUM;
 	packet->m_nInfoField2 = rtmp->m_stream_id;
 
-//	printf("SPS/PPS/VPS =%d\n", i);
+//	printf("[%d]SPS/PPS/VPS =%d\n", time(NULL), i);
 //	for (int j = 0; j < i; j++)
 //	{
-//		printf("%02x", body[j]);
+//		printf("%02x ", body[j]);
 //	}
 //	printf("\n");
 
 	/*调用发送接口*/
 	int nRet = RTMP_SendPacket(rtmp, packet, TRUE);
+	nRet = nRet == 1 ? 0 : -1;
 	free(packet);    //释放内存
 	return nRet;
 }
@@ -524,9 +585,8 @@ int RTMP_SendH265Packet(RTMP *rtmp, struct media_data *mdata,
 			int bIsKeyFrame, unsigned int nTimeStamp)
 {
 	if (data == NULL && size < 11)
-	{
 		return -1;
-	}
+
 	if (bIsKeyFrame)
 		RTMP_SendVideoSpsPpsVps(rtmp, nTimeStamp, mdata->pps, mdata->pps_len, mdata->sps, mdata->sps_len, mdata->vps,
 					mdata->vps_len);
@@ -573,7 +633,10 @@ int RTMP_SendH265Packet(RTMP *rtmp, struct media_data *mdata,
 //	printf("\n");
 
 	if (RTMP_IsConnected(rtmp))
+	{
 		ret = RTMP_SendPacket(rtmp, packet, TRUE);
+		ret = ret == 1 ? 0 : -1;
+	}
 	free(packet);
 	return ret;
 }
@@ -712,7 +775,9 @@ static int _RTMP_H264SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *d
 					printf("RTMP_SendMetaData: width:%d, height:%d fps:%d\n", mdata->width,
 								mdata->height,
 								mdata->fps);
-					ret = RTMP_SendMetaData(rtmp, mdata->width,
+					ret = RTMP_SendMetaData(rtmp,
+					MEDIA_DATA_H264,
+								mdata->width,
 								mdata->height,
 								mdata->fps);
 					printf("RTMP_SendVideoSpsPps: sps=%d, pps=%d\n", mdata->sps_len, mdata->pps_len);
@@ -866,7 +931,7 @@ const char *HevcNaluType_ToString(int type)
 	return "unknow";
 }
 
-static int _RTMP_H265SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *data, int size, int ms)
+int _RTMP_H265SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *data, int size, int ms)
 {
 	int nal_head_pos = 0;
 	int nal_split_pos = 0;
@@ -893,10 +958,17 @@ static int _RTMP_H265SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *d
 		{
 			case NAL_UNIT_SPS: //7
 			{
-//				printf("SPS\n");
+				//printf("SPS\n");
 				// 解码SPS,获取视频图像宽、高信息
 				//log_print_hex(ptr + nal_head_pos, nal_len, stdout, nal_len);
 				int width = 0, height = 0, fps = 0;
+
+				if (mdata->sps)
+					free(mdata->sps);
+
+				mdata->sps = (unsigned char*) malloc(nal_len);
+				mdata->sps_len = nal_len;
+				memcpy(mdata->sps, ptr + nal_head_pos, mdata->sps_len);
 				h265_decode_sps(ptr + nal_head_pos, nal_len, &width, &height, &fps);
 
 				if (mdata->width != 0 && mdata->height != 0 && mdata->width != width && mdata->height != height)
@@ -907,13 +979,7 @@ static int _RTMP_H265SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *d
 				mdata->width = width;
 				mdata->height = height;
 				mdata->fps = fps;
-				if (mdata->sps)
-					free(mdata->sps);
-
-				mdata->sps = (unsigned char*) malloc(nal_len);
-				mdata->sps_len = nal_len;
-				memcpy(mdata->sps, ptr + nal_head_pos, mdata->sps_len);
-//				printf("SPS: %dx%d, %dfps\n", width, height, fps);
+				printf("SPS: %dx%d, %dfps\n", width, height, fps);
 			}
 			break;
 			case NAL_UNIT_PPS: //8
@@ -944,7 +1010,7 @@ static int _RTMP_H265SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *d
 
 				if (iskey && mdata->status == 0)
 				{
-					RTMP_SendMetaData(rtmp, mdata->width, mdata->height, mdata->fps);
+					RTMP_SendMetaData(rtmp, MEDIA_DATA_H265, mdata->width, mdata->height, mdata->fps);
 					mdata->status = 1;
 				}
 
@@ -993,5 +1059,4 @@ int RTMPStreamOut_SendH265(RTMPOut *out, uint8_t *data, int size, int ms)
 		return ret;
 	}
 	return RTMP_IsConnected(out->rtmp) ? 0 : -1;
-	return 0;
 }
