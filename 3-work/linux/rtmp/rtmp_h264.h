@@ -21,8 +21,9 @@
 #define RTMP_H264_H_
 
 #include <stdint.h>
-#include "H264.h"
+
 #include "../librtmp/rtmp.h"
+#include "H264.h"
 
 #define NONE                 "\e[0m"
 #define BLACK                "\e[0;30m"
@@ -69,6 +70,8 @@ typedef struct RTMPStreamOut RTMPOut;
 int RTMPStreamOut_open(RTMPOut *out, const char *url);
 
 void RTMPStreamOut_close(RTMPOut *out);
+
+void RTMPStreamOut_setfps(RTMPOut *out, int fps);
 
 int RTMPStreamOut_Send(RTMPOut *out, uint8_t *data, int size, int ms);
 

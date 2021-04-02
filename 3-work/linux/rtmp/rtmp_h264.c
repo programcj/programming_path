@@ -93,20 +93,20 @@ int H264_NALFindPos(uint8_t *data, int size, int *pnal_head, int *pnal_len)
 
 #define RTMP_HEAD_SIZE   (sizeof(RTMPPacket)+RTMP_MAX_HEADER_SIZE)
 
-char * put_byte(char *output, uint8_t nVal)
+static char *put_byte(char *output, uint8_t nVal)
 {
 	output[0] = nVal;
 	return output + 1;
 }
 
-char * put_be16(char *output, uint16_t nVal)
+static char *put_be16(char *output, uint16_t nVal)
 {
 	output[1] = nVal & 0xff;
 	output[0] = nVal >> 8;
 	return output + 2;
 }
 
-char * put_be24(char *output, uint32_t nVal)
+static char *put_be24(char *output, uint32_t nVal)
 {
 	output[2] = nVal & 0xff;
 	output[1] = nVal >> 8;
@@ -114,7 +114,7 @@ char * put_be24(char *output, uint32_t nVal)
 	return output + 3;
 }
 
-char * put_be32(char *output, uint32_t nVal)
+static char *put_be32(char *output, uint32_t nVal)
 {
 	output[3] = nVal & 0xff;
 	output[2] = nVal >> 8;
@@ -123,14 +123,14 @@ char * put_be32(char *output, uint32_t nVal)
 	return output + 4;
 }
 
-char *put_be64(char *output, uint64_t nVal)
+static char *put_be64(char *output, uint64_t nVal)
 {
 	output = put_be32(output, nVal >> 32);
 	output = put_be32(output, nVal);
 	return output;
 }
 
-char *put_amf_string(char *c, const char *str)
+static char *put_amf_string(char *c, const char *str)
 {
 	uint16_t len = strlen(str);
 	c = put_be16(c, len);
@@ -138,7 +138,7 @@ char *put_amf_string(char *c, const char *str)
 	return c + len;
 }
 
-char *put_amf_double(char *c, double d)
+static char *put_amf_double(char *c, double d)
 {
 	*c++ = AMF_NUMBER; /* type: Number */
 	{
@@ -248,8 +248,8 @@ int RTMP_SendMetaData(RTMP *rtmp, int code_id, int width, int height, int fps)
 	p = put_amf_string(p, "height");
 	p = put_amf_double(p, height);
 
-//	p = put_amf_string(p, "framerate");
-//	p = put_amf_double(p, 25);
+	p = put_amf_string(p, "framerate");
+	p = put_amf_double(p, fps);
 
 	p = put_amf_string(p, "videodatarate");
 	p = put_amf_double(p, 0);
@@ -658,6 +658,12 @@ void RTMPStreamOut_close(struct RTMPStreamOut *out)
 	out->frame_sps_exists = 0;
 }
 
+void RTMPStreamOut_setfps(RTMPOut *out, int fps)
+{
+	if (out)
+		out->mdata.fps = fps;
+}
+
 int RTMPStreamOut_open(struct RTMPStreamOut *out, const char *url)
 {
 	RTMP *rtmp = NULL;
@@ -747,7 +753,7 @@ static int _RTMP_H264SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *d
 				}
 				mdata->width = width;
 				mdata->height = height;
-				mdata->fps = fps;
+				//mdata->fps = fps;
 				if (mdata->sps)
 					free(mdata->sps);
 
@@ -814,7 +820,7 @@ static int _RTMP_H264SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *d
 			break;
 			default:
 				{
-				printf("errr ...\n");
+				printf("errr type=%d \n", header.nal_unit_type);
 			}
 			break;
 		}
@@ -978,7 +984,7 @@ int _RTMP_H265SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *data, in
 				}
 				mdata->width = width;
 				mdata->height = height;
-				mdata->fps = fps;
+				//mdata->fps = fps;
 				printf("SPS: %dx%d, %dfps\n", width, height, fps);
 			}
 			break;
@@ -1004,9 +1010,13 @@ int _RTMP_H265SendPacket(RTMP *rtmp, struct media_data *mdata, uint8_t *data, in
 			}
 			break;
 			case NAL_UNIT_CODED_SLICE_IDR:
+				case NAL_UNIT_CODED_SLICE_IDR_N_LP:
 				case NAL_UNIT_CODED_SLICE_TRAIL_R:
+				case NAL_UNIT_CODED_SLICE_BLA:
+				case NAL_UNIT_CODED_SLICE_BLA_N_LP:
 				{
-				int iskey = (nal_unit_type == NAL_UNIT_CODED_SLICE_IDR) ? 1 : 0;
+				int iskey = (nal_unit_type == NAL_UNIT_CODED_SLICE_IDR
+							|| nal_unit_type == NAL_UNIT_CODED_SLICE_IDR_N_LP) ? 1 : 0;
 
 				if (iskey && mdata->status == 0)
 				{
