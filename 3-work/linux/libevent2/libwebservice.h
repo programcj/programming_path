@@ -1,7 +1,7 @@
-/*
- * sps_decode.h
+﻿/*
+ * libweb.h
  *
- *  Created on: 2020年11月7日
+ *  Created on: 2021年2月26日
  *      Author: cc
  *
  *                .-~~~~~~~~~-._       _.-~~~~~~~~~-.
@@ -17,21 +17,33 @@
  * 请注意编码格式
  */
 
-#ifndef SPS_DECODE_H_
-#define SPS_DECODE_H_
+#ifndef SRC_LIBWEBSERVICE_LIBWEBSERVICE_H_
+#define SRC_LIBWEBSERVICE_LIBWEBSERVICE_H_
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-int h264_decode_sps(unsigned char * buf, unsigned int nLen, int *width, int *height, int *fps);
+#include "evhttp_ex.h"
 
-void h264_sps_parse(unsigned char *buf, int nLen, int *pwidth, int *pheight);
+//初始化端口号
+void webservice_init(int web_port);
 
+//获取端口号
+int webservice_getport();
+
+//内部会创建线程
+void webservice_start();
+
+//注册API调用
+void webserver_regedit_api(const char *path, void (*fun)(struct evhttp_request *req));
+
+//不会创建线程
+void webservice_loop();
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* SPS_DECODE_H_ */
+#endif /* SRC_LIBWEBSERVICE_LIBWEBSERVICE_H_ */
