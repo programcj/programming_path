@@ -881,3 +881,71 @@ void os_pthread_set_name(const char *format, ...)
 	prctl(PR_SET_NAME, name);
 }
 
+static char* concat_subpath_file(const char *path, const char *name)
+{
+	if (!path)
+		path = "";
+	char last = 0;
+	int len = strlen(path);
+	if (len > 0)
+		len -= 1;
+	last = path[len];
+	while (*name == '/')
+		name++;
+
+	char *allp = 0;
+	int size = 0;
+	FILE *fp = open_memstream(&allp, &size);
+	if (fp)
+	{
+		fprintf(fp, "%s%s%s", path, (last != '/' ? "/" : ""), name);
+		fclose(fp);
+	}
+	return allp;
+}
+
+//文件的大小(byte)
+unsigned long long os_path_size(const char *filename)
+{
+	unsigned long long sum = 0;
+	struct stat statbuf;
+
+	//操作的是软链接文件本身
+	if (lstat(filename, &statbuf) != 0)
+	{
+		return 0;
+	}
+
+	//文件所占块数
+	sum = statbuf.st_blocks * 512;
+
+	//printf("[%s] statbuf.st_blksize=%d\n", filename, statbuf.st_blksize);
+	if (S_ISLNK(statbuf.st_mode))
+	{
+	}
+	if (S_ISDIR(statbuf.st_mode))
+	{
+		DIR *dir;
+		struct dirent *entry;
+		char *newfile;
+
+		dir = opendir(filename);
+		if (!dir)
+			return sum;
+
+		while ((entry = readdir(dir)))
+		{
+			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+				continue;
+
+			newfile = concat_subpath_file(filename, entry->d_name);
+			if (newfile == NULL)
+				continue;
+			sum += os_path_size(newfile);
+			free(newfile);
+		}
+		closedir(dir);
+	}
+	return sum;
+}
+

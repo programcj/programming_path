@@ -93,6 +93,9 @@ void os_pthread_set_name(const char *format, ...);
 
 extern float os_sys_cpu_use();
 
+//文件的大小(byte)
+unsigned long long os_path_size(const char *filename);
+
 #ifdef __cplusplus
 }
 #endif
