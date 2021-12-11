@@ -25,22 +25,29 @@ extern "C"
 {
 #endif
 
-#include "evhttp_ex.h"
+	struct evhttp_request;
 
-//初始化端口号
-void webservice_init(int web_port);
+	//#include "evhttp_ex.h"
 
-//获取端口号
-int webservice_getport();
+		//初始化端口号
+	void webservice_init(int web_port);
 
-//内部会创建线程
-void webservice_start();
+	//获取端口号
+	int webservice_getport();
 
-//注册API调用
-void webserver_regedit_api(const char *path, void (*fun)(struct evhttp_request *req));
+	//内部会创建线程
+	void webservice_start();
+	void webservice_stop();
 
-//不会创建线程
-void webservice_loop();
+	//注册API调用
+	void webserver_regedit_api(const char* path, void (*fun)(struct evhttp_request* req));
+
+	//获取API
+	void webservice_apis(void (*fun)(const char* name, void* ctx), void* ctx);
+
+	//不会创建线程
+	void webservice_loop();
+	
 
 #ifdef __cplusplus
 }

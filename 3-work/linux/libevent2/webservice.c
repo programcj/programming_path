@@ -63,7 +63,6 @@
 #include <event2/buffer.h>
 #include <event2/util.h>
 #include <event2/keyvalq_struct.h>
-#include "log.h"
 
 #ifdef _WIN32
 #include <event2/thread.h>
@@ -94,28 +93,27 @@
 #endif
 #endif /* _WIN32 */
 
+
 #include "libwebservice.h"
 #include "evhttp_ex.h"
 #include "cJSONEx.h"
-#include "libcommon.h"
 
-static int _config_web_port = 8085;
+#include "libcommon.h"
 
 struct httpapi
 {
-	char *path;
-	void (*fun)(struct evhttp_request *req);
+	char* path;
+	void (*fun)(struct evhttp_request* req);
 
-	struct httpapi *next;
-	struct httpapi *priv;
+	struct httpapi* next;
+	struct httpapi* priv;
 };
 
-static struct httpapi apis =
-			{ "", NULL, &apis, &apis };
+static struct httpapi apis ={ "", NULL, &apis, &apis };
 
-void webserver_regedit_api(const char *path, void (*fun)(struct evhttp_request *req))
+void webserver_regedit_api(const char* path, void (*fun)(struct evhttp_request* req))
 {
-	struct httpapi *api = (struct httpapi*) calloc(sizeof(struct httpapi), 1);
+	struct httpapi* api = (struct httpapi*)calloc(sizeof(struct httpapi), 1);
 	if (api)
 	{
 		api->path = strdup(path);
@@ -127,15 +125,30 @@ void webserver_regedit_api(const char *path, void (*fun)(struct evhttp_request *
 	}
 }
 
+void webservice_apis(void (*fun)(const char *name, void *ctx), void *ctx)
+{
+	const char* _split = NULL;
+	struct httpapi* apifun = NULL;
+
+	for (apifun = apis.next; apifun != &apis; apifun = apifun->next)
+	{
+		if (apifun->path && strlen(apifun->path) > 0) {
+			//需要输出这个地址
+			if (fun) {
+				fun(apifun->path, ctx);
+			}
+		}
+	}
+}
+
+static int _config_web_port = 8085;
+
 void webservice_init(int web_port)
 {
 	_config_web_port = web_port;
 }
 
-int webservice_getport() 
-{
-	return _config_web_port;
-}
+int webservice_getport() { return _config_web_port; }
 
 int http_cookie_check(const char *cookieval)
 {
@@ -144,8 +157,8 @@ int http_cookie_check(const char *cookieval)
 	return 1;
 }
 
-void http_api_send_response(struct evhttp_request *request, int result,
-			const char *msg, cJSON *json_data)
+void http_api_send_response(struct evhttp_request* request, int result,
+	const char *msg, cJSON *json_data)
 {
 	cJSON *json = cJSON_CreateObject();
 	cJSON_AddStringToObjectEx(json, "result", "%d", result);
@@ -156,7 +169,7 @@ void http_api_send_response(struct evhttp_request *request, int result,
 	cJSON_Delete(json);
 }
 
-void http_gencb(struct evhttp_request *request, void *arg)
+void http_gencb(struct evhttp_request *request, void* arg)
 {
 	//const struct evhttp_uri* evhttp_uri = evhttp_request_get_evhttp_uri(request);
 	//char url[8192];
@@ -173,7 +186,7 @@ void http_gencb(struct evhttp_request *request, void *arg)
 	{
 		log_d("http", "options reqeust\n");
 		evhttp_add_header(evhttp_request_get_output_headers(request),
-					"Access-Control-Allow-Methods", "GET,POST,OPTIONS,PUT");
+			"Access-Control-Allow-Methods", "GET,POST,OPTIONS,PUT");
 		evhttp_request_resp_origin(request);
 
 		struct evbuffer *retbuff = evbuffer_new();
@@ -182,7 +195,6 @@ void http_gencb(struct evhttp_request *request, void *arg)
 		evbuffer_free(retbuff);
 		return;
 	}
-
 #if 0
 	if (strncasecmp(uri, "/agapi", 4) == 0 && host)
 	{
@@ -206,8 +218,8 @@ void http_gencb(struct evhttp_request *request, void *arg)
 				strncpy(token, h_token, sizeof(token) - 1);
 		}
 
-		log_d("API", "accept request cmdtype:%s, url:%s, LXSESSIONID:[%s]\n",
-			evhttp_cmd_type_tostr(cmdtype), uri, token);
+		if(strcmp(uri,"/agapi/debuginfo")!=0)
+			log_d("API", "accept request cmdtype:%s, url:%s, LXSESSIONID:[%s]\n",	evhttp_cmd_type_tostr(cmdtype), uri, token);
 
 		for (i = 0; restful_apis[i].path != NULL; i++)
 		{
@@ -270,25 +282,26 @@ void http_gencb(struct evhttp_request *request, void *arg)
 	}
 #else
 	{
-		struct httpapi *apifun = NULL;
+		
 		int exists = 0;
 
-		struct evhttp_uri *http_uri = evhttp_uri_parse(uri);
-		const char *path = evhttp_uri_get_path(http_uri);
-		const char *query = evhttp_uri_get_query(http_uri);
+		struct evhttp_uri* http_uri = evhttp_uri_parse(uri);
+		const char* path = evhttp_uri_get_path(http_uri);
+		const char* query = evhttp_uri_get_query(http_uri);
 		if (!path)
 			path = "/";
 		if (!query)
 			query = "";
 
 		const char* _split = NULL;
+		struct httpapi* apifun = NULL;
 
 		for (apifun = apis.next; apifun != &apis; apifun = apifun->next)
 		{
 			_split = strchr(apifun->path, '*');
-			if(_split)
+			if (_split)
 			{
-				int len=_split - apifun->path;
+				int len = _split - apifun->path;
 				if (strncasecmp(apifun->path, path, len) == 0 && apifun->fun)
 				{
 					printf("accept request cmdtype:%s, url:%s\n", evhttp_cmd_type_tostr(cmdtype), uri);
@@ -312,61 +325,57 @@ void http_gencb(struct evhttp_request *request, void *arg)
 			return;
 	}
 #endif
-	evhttp_send_document_cb(request, "htmls");
+	//发送文件
+	evhttp_send_document_cb(request, "",  "htmls", 0);
 }
 
 static int
-display_listen_sock(struct evhttp_bound_socket *handle)
+display_listen_sock(struct evhttp_bound_socket* handle)
 {
 	struct sockaddr_storage ss;
 	evutil_socket_t fd;
 	ev_socklen_t socklen = sizeof(ss);
 	char addrbuf[128];
-	void *inaddr;
-	const char *addr;
+	void* inaddr;
+	const char* addr;
 	int got_port = -1;
 
 	fd = evhttp_bound_socket_get_fd(handle);
 	memset(&ss, 0, sizeof(ss));
-	if (getsockname(fd, (struct sockaddr*) &ss, &socklen))
-	{
+	if (getsockname(fd, (struct sockaddr*)&ss, &socklen)) {
 		perror("getsockname() failed");
 		return 1;
 	}
 
-	if (ss.ss_family == AF_INET)
-	{
-		got_port = ntohs(((struct sockaddr_in*) &ss)->sin_port);
-		inaddr = &((struct sockaddr_in*) &ss)->sin_addr;
+	if (ss.ss_family == AF_INET) {
+		got_port = ntohs(((struct sockaddr_in*)&ss)->sin_port);
+		inaddr = &((struct sockaddr_in*)&ss)->sin_addr;
 	}
-	else if (ss.ss_family == AF_INET6)
-	{
-		got_port = ntohs(((struct sockaddr_in6*) &ss)->sin6_port);
-		inaddr = &((struct sockaddr_in6*) &ss)->sin6_addr;
+	else if (ss.ss_family == AF_INET6) {
+		got_port = ntohs(((struct sockaddr_in6*)&ss)->sin6_port);
+		inaddr = &((struct sockaddr_in6*)&ss)->sin6_addr;
 	}
-	else
-	{
+	else {
 		fprintf(stderr, "Weird address family %d\n",
-					ss.ss_family);
+			ss.ss_family);
 		return 1;
 	}
 
 	addr = evutil_inet_ntop(ss.ss_family, inaddr, addrbuf,
-				sizeof(addrbuf));
-	if (addr)
-	{
+		sizeof(addrbuf));
+	if (addr) {
 		printf("Listening on %s:%d\n", addr, got_port);
 		//evutil_snprintf(uri_root, sizeof(uri_root),
 		//	"http://%s:%d", addr, got_port);
 	}
-	else
-	{
+	else {
 		fprintf(stderr, "evutil_inet_ntop failed\n");
 		return 1;
 	}
 
 	return 0;
 }
+
 
 static void api_request_cb(struct evhttp_request *req, void *arg)
 {
@@ -376,7 +385,7 @@ static void api_request_cb(struct evhttp_request *req, void *arg)
 	struct evkeyvalq *headers;
 
 	const char *host, *uri_host, *uri_path, *uri_query, *uri_user_info,
-				*uri_scheme;
+		*uri_scheme;
 	ev_uint16_t port;
 	char *addr;
 	int uri_port;
@@ -410,25 +419,32 @@ static void api_request_cb(struct evhttp_request *req, void *arg)
 		host = "";
 
 	printf(
-				"addr:%s, port:%d, host:%s, method:%d, host:%s, path:%s, query:%s, user info:%s, scheme:%s, port:%d\n",
-				addr, port, host, method, uri_host, uri_path, uri_query,
-				uri_user_info, uri_scheme, uri_port);
+		"addr:%s, port:%d, host:%s, method:%d, host:%s, path:%s, query:%s, user info:%s, scheme:%s, port:%d\n",
+		addr, port, host, method, uri_host, uri_path, uri_query,
+		uri_user_info, uri_scheme, uri_port);
 
 	cJSON *jsonResp = cJSON_CreateObject();
 	cJSON_AddStringToObject(jsonResp, "host", host);
 
 	cJSON *jarray = cJSON_CreateArray();
+#if 0
+	int i = 0;
+	while (restful_apis[i].path != NULL)
 	{
-		struct httpapi *apifun = NULL;
-		for (apifun = apis.next; apifun != &apis; apifun = apifun->next)
-		{
-			//if (strcasecmp(apifun->path, uri_path) == 0 && apifun->fun)
-			{
-				cJSON_AddItemToArray(jarray, cJSON_CreateString(apifun->path));
-			}
+		cJSON_AddItemToArray(jarray, cJSON_CreateString(restful_apis[i].path));
+		i++;
+	}
+#else
+	struct httpapi* apifun = NULL;
+
+	for (apifun = apis.next; apifun != &apis; apifun = apifun->next)
+	{
+		if (strlen(apifun->path) > 0) {
+			cJSON_AddItemToArray(jarray, cJSON_CreateString(apifun->path));
 		}
 	}
-	cJSON_AddItemToObject(jsonResp, "apis", jarray);
+#endif
+	cJSON_AddItemToObject(jsonResp, "jarray", jarray);
 
 	evhttp_send_reply_json(req, jsonResp);
 	cJSON_Delete(jsonResp);
@@ -457,7 +473,7 @@ void webservice_loop()
 	//setbuf(stdout, NULL);
 	//setbuf(stderr, NULL);
 
-	/** Read env like in regress */
+		/** Read env like in regress */
 	//if (getenv("EVENT_DEBUG_LOGGING_ALL"))
 	//	event_enable_debug_logging(EVENT_DBG_ALL);
 	cfg = event_config_new();
@@ -477,8 +493,7 @@ void webservice_loop()
 		ret = 1;
 	}
 
-	evhttp_set_allowed_methods(http,
-				EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_OPTIONS);
+	evhttp_set_allowed_methods(http, EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_OPTIONS);
 	evhttp_set_timeout(http, 60);
 	evhttp_set_gencb(http, http_gencb, NULL);
 	evhttp_set_cb(http, "/api", api_request_cb, NULL);
@@ -487,7 +502,7 @@ void webservice_loop()
 	if (!handle)
 	{
 		fprintf(stderr, "couldn't bind to port %d. Exiting.\n",
-					_config_web_port);
+			_config_web_port);
 		ret = 1;
 		goto err;
 	}
@@ -500,13 +515,13 @@ void webservice_loop()
 
 	event_base_dispatch(base);
 
-	err: if (cfg)
-		event_config_free(cfg);
-	if (http)
-		evhttp_free(http);
+err: if (cfg)
+	event_config_free(cfg);
+	 if (http)
+		 evhttp_free(http);
 }
 
-static void* _thread_web(void *arg)
+static void *_thread_web(void *arg)
 {
 	os_thread_setname("WebServer#%d", _config_web_port);
 	webservice_loop();
@@ -519,4 +534,7 @@ void webservice_start()
 	os_thread_run(_thread_web, NULL);
 }
 
-
+void webservice_stop()
+{
+	//event_base_loopexit();
+}
