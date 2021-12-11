@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Onvif_HttpDigest.c
  *
  *  Created on: 2019年11月7日
@@ -20,6 +20,26 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <ctype.h>
+
+#if defined(WIN32) || defined(_WIN32)
+#include <Windows.h>
+#else
+#include <sys/poll.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <sys/fcntl.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <sys/poll.h>
+#include <errno.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <sys/fcntl.h>
+#include <unistd.h>
+#endif
 
 //#include "curl/curl.h"
 #include <time.h>
@@ -28,18 +48,21 @@
 #include "digest.h"
 #include "client.h"
 #include "SOAP_Onvif.h"
-#include "log_onvif.h"
 
 static uint32_t osclockms()
 {
+#ifdef _MSC_VER
+	return GetTickCount64();
+#else
 	struct timespec tp;
 	clock_gettime(CLOCK_MONOTONIC, &tp);
 	return tp.tv_sec * 1000 + tp.tv_nsec / 1000 / 1000;
+#endif
 }
 
-static int http_content_point(const char* txt)
+static int http_content_point(const char *txt)
 {
-	const char* ptr = txt;
+	const char *ptr = txt;
 	while (ptr && *ptr)
 	{
 		if (*ptr == '\n')
@@ -63,21 +86,24 @@ static int http_content_point(const char* txt)
 	return ptr - txt;
 }
 
-static void _cnonce_buildstr(char randstr[33])
+static void _cnonce_buildstr(char *randstr)
 {
 	int i = 0;
+	char *ptr = randstr;
 	unsigned short v = 0;
 	srand((unsigned) time(NULL)); /*播种子*/
+	memset(randstr, 0, 30);
 	for (i = 0; i < 32; i += 2)
 	{
 		v = rand() % 100;/*产生随机整数*/
-		sprintf(randstr + i, "%02X", v);
+		sprintf(ptr, "%02X", v);
+		ptr += 2;
 	}
-	randstr[32] = 0;
+	*ptr = 0;
 }
 
-static int http_auth_digest(const char* dsc_disget, char* resultstr, int reslen,
-			const char* username, const char* password, const char *uri)
+static int http_auth_digest(const char *dsc_disget, char *resultstr, int reslen,
+			const char *username, const char *password, const char *uri)
 {
 	//https://github.com/jacketizer/libdigest
 	digest_t d;
@@ -96,21 +122,19 @@ static int http_auth_digest(const char* dsc_disget, char* resultstr, int reslen,
 
 	digest_client_parse(&d, dsc_disget);
 
-	digest_set_attr(&d, D_ATTR_USERNAME, (digest_attr_value_t) username);
-	digest_set_attr(&d, D_ATTR_PASSWORD, (digest_attr_value_t) password);
-	digest_set_attr(&d, D_ATTR_URI, (digest_attr_value_t) uri);
+	digest_set_attr(&d, D_ATTR_USERNAME, (digest_attr_value_tptr) username);
+	digest_set_attr(&d, D_ATTR_PASSWORD, (digest_attr_value_tptr) password);
+	digest_set_attr(&d, D_ATTR_URI, (digest_attr_value_tptr) uri);
 
 	//char *cnonce = "400616322553302B623F0A0C514B0543";
 	_cnonce_buildstr(cnonce);
 
-	digest_set_attr(&d, D_ATTR_CNONCE, (digest_attr_value_t) cnonce);
-
-	digest_set_attr(&d, D_ATTR_ALGORITHM, (digest_attr_value_t) 1);
-	digest_set_attr(&d, D_ATTR_METHOD,
-				(digest_attr_value_t) DIGEST_METHOD_POST);
+	digest_set_attr(&d, D_ATTR_CNONCE, (digest_attr_value_tptr) cnonce);
+	digest_set_attr(&d, D_ATTR_ALGORITHM, (digest_attr_value_tptr) 1);
+	digest_set_attr(&d, D_ATTR_METHOD, (digest_attr_value_tptr) DIGEST_METHOD_POST);
 
 	if (!p_opaque)
-		digest_set_attr(&d, D_ATTR_OPAQUE, (digest_attr_value_t) "");
+		digest_set_attr(&d, D_ATTR_OPAQUE, (digest_attr_value_tptr) "");
 
 	if (-1 == digest_client_generate_header(&d, resultstr, reslen))
 	{
@@ -119,23 +143,18 @@ static int http_auth_digest(const char* dsc_disget, char* resultstr, int reslen,
 	return 0;
 }
 
-#include <ctype.h>
-#include <sys/poll.h>
-#include <errno.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <sys/fcntl.h>
-#include <netdb.h>
-#include <unistd.h>
-
-static int _socket_writestr(int fd, const char *str)
+static int _socket_writestr(SOCKET fd, const char *str)
 {
-	return write(fd, str, strlen(str));
+	return send(fd, str, strlen(str), 0);
 }
 
 //非阻塞模式
-static inline int _socket_nonblock(int fd, int flag)
+static inline int _socket_nonblock(SOCKET fd, int flag)
 {
+#ifdef _MSC_VER
+	unsigned long ul = flag;
+	return ioctlsocket(fd, FIONBIO, (unsigned long*)&ul);    //设置成非阻塞模式
+#else
 	int opt = fcntl(fd, F_GETFL, 0);
 	if (opt == -1)
 	{
@@ -146,11 +165,8 @@ static inline int _socket_nonblock(int fd, int flag)
 	else
 		opt &= ~O_NONBLOCK;
 
-	if (fcntl(fd, F_SETFL, opt) == -1)
-	{
-		return -1;
-	}
-	return 0;
+	return fcntl(fd, F_SETFL, opt);
+#endif
 }
 
 int socket_readline(int fd, char *line, int maxsize)
@@ -169,6 +185,7 @@ int socket_readline(int fd, char *line, int maxsize)
 		{
 			if (errno == EAGAIN || errno == EINTR)
 				continue;
+			//WSAGetLastError
 			return ret;
 		}
 		*line++ = v;
@@ -180,6 +197,23 @@ int socket_readline(int fd, char *line, int maxsize)
 		}
 	}
 	return count;
+}
+
+int socket_checkin(SOCKET fd, int timeoutsec)
+{
+	fd_set readfds;
+	struct timeval tv =
+	{ timeoutsec, 0 };
+	FD_ZERO(&readfds);
+	FD_SET(fd, &readfds);
+
+	select(((int) fd) + 1, &readfds, NULL, NULL, &tv);
+
+	if (FD_ISSET(fd, &readfds))
+	{
+		return 1;
+	}
+	return 0;
 }
 
 static int http_post(const char *url, const char *authorization,
@@ -197,8 +231,8 @@ static int http_post(const char *url, const char *authorization,
 	//http://192.168.1.241.80/onvif/device_service
 	//http://www.xxx.com:8888/onvif/device_service
 	{
-		char *ptr;
-		char *tmpp;
+		char *ptr = NULL;
+		char *tmpp = NULL;
 		int isssl = 0;
 
 		if (strncmp(url, "http://", 7) == 0)
@@ -235,11 +269,12 @@ static int http_post(const char *url, const char *authorization,
 
 	//printf("host:%s port:%d path:%s\n", hoststr, port, path);
 
-	int fd;
+	SOCKET fd;
 
 	struct sockaddr_in addr;
 	memset(&addr, 0, sizeof(addr));
 	{
+#if 0
 		struct addrinfo ai, *res, *result;
 		void *p = NULL;
 
@@ -278,6 +313,22 @@ static int http_post(const char *url, const char *authorization,
 		//ret = inet_aton(hoststr, &addr.sin_addr);
 		addr.sin_addr = *((struct in_addr *) p);
 		freeaddrinfo(result);
+#else
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons(port);
+		addr.sin_addr.s_addr = inet_addr(hoststr);
+
+		if (addr.sin_addr.s_addr == INADDR_NONE)
+		{
+			struct hostent *host = gethostbyname(hoststr);
+			if (host == NULL || host->h_addr== NULL)
+			{
+				return -1;
+			}
+			addr.sin_addr = *(struct in_addr*) host->h_addr;
+		}
+
+#endif
 	}
 
 	char buffcache[1024];
@@ -289,7 +340,7 @@ static int http_post(const char *url, const char *authorization,
 	{
 		printf("connect err:%d,%s, IP:%s:%d\n", errno, strerror(errno), hoststr,
 					port);
-		close(fd);
+		closesocket(fd);
 		//goto _hquit;
 		return -1;
 	}
@@ -318,9 +369,9 @@ static int http_post(const char *url, const char *authorization,
 	_socket_writestr(fd, "\r\n");
 	_socket_writestr(fd, poststr);
 
-	struct pollfd pos;
-	pos.fd = fd;
-	pos.events = POLLIN | POLLHUP | POLLERR | POLLNVAL;
+	//struct pollfd pos;
+	//pos.fd = fd;
+	//pos.events = POLLIN | POLLHUP | POLLERR | POLLNVAL;
 
 	int content_length = -1;
 	int http_head_readflag = 0;
@@ -335,6 +386,7 @@ static int http_post(const char *url, const char *authorization,
 	long int filesize = 0;
 	long int http_head_size = 0;
 	int loopflag = 1;
+
 	while (loopflag)
 	{
 		if (filesize > 1024 * 1024 * 2)
@@ -342,16 +394,17 @@ static int http_post(const char *url, const char *authorization,
 			perror("不能超过2M\n");
 			break;
 		}
-		ret = poll(&pos, 1, 2 * 1000);
-		if (ret <= 0)
-		{
-			printf("timeout ret=%d\n", ret);
-			break;
-		}
 
-		if (pos.revents != POLLIN)
-			continue;
+		ret = socket_checkin(fd, 1);
 
+		//ret = poll(&pos, 1, 2 * 1000);
+		//if (ret <= 0)
+		//{
+		//	printf("timeout ret=%d\n", ret);
+		//	break;
+		//}
+		//if (pos.revents != POLLIN)
+		//	continue;
 		//read http head
 		if (0 == http_head_readflag)
 		{
@@ -424,8 +477,8 @@ static int http_post(const char *url, const char *authorization,
 
 	_hquit:
 
-	shutdown(fd, SHUT_RDWR);
-	close(fd);
+	//shutdown(fd, SHUT_RDWR);
+	closesocket(fd);
 
 	//printf("http size:%ld\n", filesize);
 
@@ -709,9 +762,9 @@ struct xml_node
 	char *text;
 };
 
-static struct xml_node *xml_node_alloc()
+static struct xml_node* xml_node_alloc()
 {
-	return (struct xml_node *) calloc(sizeof(struct xml_node), 1);
+	return (struct xml_node*) calloc(sizeof(struct xml_node), 1);
 }
 
 static void xml_node_Delete(struct xml_node *node)
@@ -726,7 +779,7 @@ static void xml_node_Delete(struct xml_node *node)
 	}
 }
 
-static char *strchr_end(const char *str_head, char *str_end, int c)
+static char* strchr_end(const char *str_head, char *str_end, int c)
 {
 	while (str_end >= str_head)
 	{
@@ -737,7 +790,7 @@ static char *strchr_end(const char *str_head, char *str_end, int c)
 	return NULL;
 }
 
-static struct xml_node *xml_getNode(const char *xmlstr, const char *name)
+static struct xml_node* xml_getNode(const char *xmlstr, const char *name)
 {
 	char *ps = NULL;
 	char *ps_end = NULL;
@@ -870,7 +923,7 @@ int printstr(const char *p, int len)
 	return ret;
 }
 
-static char *xml_findend(const char *xmlstr, const char *labelname,
+static char* xml_findend(const char *xmlstr, const char *labelname,
 			int labellen)
 {
 	const char *p = xmlstr;
@@ -974,26 +1027,152 @@ void xml_label(const char *xmlstr,
 	}
 }
 
+void xml_label2(const char *xmlstr,
+			void (*callback)(int treeindex, const char *nodename, int namelen, const char *txt, int txtlen, void *ctx),
+			void *ctx)
+{
+	const char *p = xmlstr; //xml 文档开始
+	const char *end = xmlstr + strlen(xmlstr); //文档结尾
+	const char *lend = NULL; //元素节点 结束位置
+	const char *txt_s = NULL; //元素内容开始
+	const char *txt_e = NULL; //元素内容结束
+
+	const char *lname_s; //元素名 开始位置
+	const char *lname_end; //元素名  结束位置
+	const char *node_end; //元素  结束位置
+	const char *node_start; //元素 开始位置
+	int namelen = 0;
+
+	//层次
+	while (p && p < end)
+	{
+		if (p + 1 < end && *p == '<' && *(p + 1) != '/') //寻找<总是一一对应的 <xx:a> </xx:a>  <xx/>
+		{
+			p++;
+			node_start = p;
+			lend = strchr(p, '>');  //寻找一个元素节点  p:<   lend:>
+			if (lend)
+			{
+				lname_s = p;
+				txt_s = lend + 1; //元素内容开始位置
+
+				if (*(lend - 1) == '/' || *(lend - 1) == '?')  //如果为 /> 表示没有元素内容
+				{
+					lend--;
+					txt_s = NULL;  //元素内容为空
+					txt_e = NULL;
+				}
+				node_end = lend;
+
+				lname_end = strchr(p, ' ');
+				if (lname_end > lend || !lname_end)
+					lname_end = lend;   // <name/> 这样的类型
+
+				namelen = lname_end - lname_s; //表示元素name长度
+
+				if (txt_s)
+				{ //这是存在元素内容
+					//寻找元素结尾, 注意 <?xml version="1.0" encoding="UTF-8"?>
+					while (*txt_s == '\n' || *txt_s == '\r' || *txt_s == ' ')
+						txt_s++;
+					txt_e = txt_s;
+					while (txt_e != end)
+					{
+						if (*txt_e == '<' && *(txt_e + 1) == '/' && strncmp(txt_e + 2, lname_s, namelen) == 0)
+							break;
+						txt_e++;
+					}
+					if (txt_e == end)
+						txt_e = txt_s;					//没找到, 长度为0
+
+				}
+
+				if (callback)
+					callback(0, node_start, node_end - node_start, txt_s, txt_e - txt_s, ctx);
+
+				p = lend;  //转到下一个位置
+			}
+			else
+			{
+				fprintf(stderr, "length not find '>' %s\n", p);
+			}
+			continue;
+		}
+		p++;
+	}
+}
+
+const char* strchr_len(const char *ptr, const int v, int len)
+{
+	const char *end = ptr + len;
+	while (ptr < end)
+	{
+		if (*ptr == v)
+			return ptr;
+		ptr++;
+	}
+	return NULL;
+}
+
+const char* strstrend(const char *str, const char *end, const char *value)
+{
+	while (str < end - strlen(value))
+	{
+		if (strncmp(str, value, strlen(value)) == 0)
+			return str;
+		str++;
+	}
+	return NULL;
+}
+
 #define XML_GetProfiles "<?xml version=\"1.0\" encoding=\"utf-8\"?>"\
 	"<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\">"\
 	"<s:Body xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">"\
 	"<GetProfiles xmlns=\"http://www.onvif.org/ver10/media/wsdl\"/>"\
 	"</s:Body></s:Envelope>"
 
+#define XML_LABEL_Profiles  "Profiles"   // <trt:Profiles fixed="true" token="profile_token_1">
+#define XML_LABEL_Bounds	"Bounds"
+#define XML_LABEL_Encoding  "Encoding"
+#define XML_LABEL_Name		"Name"
+#define XML_LABEL_VideoEncoderConfiguration			"VideoEncoderConfiguration"
+
 struct OnvifGetProfilesResContext
 {
 	struct OnvifDeviceProfiles *profiles;
 	int index;
+	int profsize;
 };
+
+static void _xml_GetProfilesResponse_Profiles_size(int treeindex, const char *node_start, int nodelen, const char *txt, int txtlen, void *ctx)
+{
+	const char *end = node_start + nodelen;
+	int namelen = 0;
+	const char *name_start = strchr_len(node_start, ':', nodelen);
+	const char *name_end = NULL;
+	const char *attrib_ptr = NULL;
+
+	if (name_start)
+		name_start++;
+	name_start = name_start ? name_start : node_start;
+	name_end = strchr_len(node_start, ' ', nodelen);
+	name_end = name_end ? name_end : end;
+	namelen = name_end - name_start;
+
+	int *_size = (int*) ctx;
+	//寻找结尾点
+	if (namelen > 0 && strncasecmp(XML_LABEL_Profiles, name_start, namelen) == 0)
+		(*_size)++;
+}
 
 static void _xml_GetProfilesResponse(const char *xmllabel, int llen,
 			const char *txt, int tlen, void *user)
 {
 	struct OnvifGetProfilesResContext *context =
-				(struct OnvifGetProfilesResContext *) user;
+				(struct OnvifGetProfilesResContext*) user;
 
 	const char *label = strchr(xmllabel, ':');
-	char *attrib = (char *) xmllabel;
+	char *attrib = (char*) xmllabel;
 
 	if (label)
 	{
@@ -1011,15 +1190,10 @@ static void _xml_GetProfilesResponse(const char *xmllabel, int llen,
 	}
 	if (attrib)
 	{
-		*attrib = 0;
+		*attrib = 0;  //这里会修改xml的数据哦
 		attrib++;
 	}
 	//printf("label:%s\n", label);
-#define XML_LABEL_Profiles  "Profiles"
-#define XML_LABEL_Bounds	"Bounds"
-#define XML_LABEL_Encoding  "Encoding"
-#define XML_LABEL_Name		"Name"
-
 	if (strcasecmp(XML_LABEL_Profiles, label) == 0)
 	{
 		//printf("label:%s,attrib:%s\n", label, attrib);
@@ -1031,7 +1205,8 @@ static void _xml_GetProfilesResponse(const char *xmllabel, int llen,
 				sscanf(p, "token=%*c%[^\"\']", token);
 			else
 				token[0] = 0;
-			if (context->index < 5)
+
+			if (context->index <= context->profsize)
 			{
 				strcpy(context->profiles[context->index].token, token);
 				context->index++;
@@ -1039,50 +1214,95 @@ static void _xml_GetProfilesResponse(const char *xmllabel, int llen,
 		}
 	}
 	//  <tt:Bounds x="0" y="0" width="2048" height="1536" />
+#if 0
 	if (strcasecmp(XML_LABEL_Bounds, label) == 0)
 	{
 		int width = 0, height = 0;
+		const char* ptr = NULL;
+
 		if (strstr(attrib, "width"))
 		{
-			attrib = strstr(attrib, "width");
+			ptr = strstr(attrib, "width");
+			sscanf(ptr, "width=%*c%d%*c", &width);
 		}
-		sscanf(attrib, "width=%*c%d%*c height=%*c%d", &width, &height);
-		if (context->index > 0 && context->index < 5)
+		if (strstr(attrib, "height"))
 		{
-			//context->profiles[context->index - 1].width = width;
-			//context->profiles[context->index - 1].height = height;
+			ptr = strstr(attrib, "height");
+			sscanf(ptr, "height=%*c%d%*c", &height);
+		}
+		if (context->index > 0 && context->index < context->profsize)
+		{
+			context->profiles[context->index - 1].width = width;
+			context->profiles[context->index - 1].height = height;
 		}
 	}
+	/***
+	<tt:VideoEncoderConfiguration token="VideoEncode_token_3">
+        <tt:Name>VideoEncode_3</tt:Name>
+        <tt:UseCount>1</tt:UseCount>
+        <tt:Encoding>H264</tt:Encoding>
+        <tt:Resolution>
+            <tt:Width>704</tt:Width>
+            <tt:Height>480</tt:Height>
+        </tt:Resolution>
+        <tt:Quality>3</tt:Quality>
+        <tt:RateControl>
+            <tt:FrameRateLimit>20</tt:FrameRateLimit>
+            <tt:EncodingInterval>1</tt:EncodingInterval>
+            <tt:BitrateLimit>480</tt:BitrateLimit>
+        </tt:RateControl>
+        <tt:H264>
+            <tt:GovLength>80</tt:GovLength>
+            <tt:H264Profile>High</tt:H264Profile>
+        </tt:H264>
+        <tt:Multicast>
+            <tt:Address>
+                <tt:Type>IPv4</tt:Type>
+                <tt:IPv4Address>239.0.0.2</tt:IPv4Address>
+            </tt:Address>
+            <tt:Port>52554</tt:Port>
+            <tt:TTL>1</tt:TTL>
+            <tt:AutoStart>false</tt:AutoStart>
+        </tt:Multicast>
+        <tt:SessionTimeout>PT60S</tt:SessionTimeout>
+    </tt:VideoEncoderConfiguration>
+	**/
+#endif
+	//<tt:Encoding>H264</tt:Encoding>
 	if (strcasecmp(XML_LABEL_Encoding, label) == 0)
 	{
 		if (txt)
 			((char*) txt)[tlen] = 0;
 
-		if (context->index > 0 && context->index < 5)
-		{
-			strncpy(context->profiles[context->index - 1].encodname, txt,
-						20 - 1);
-		}
-		//printf("encode:%s\n", txt);
+		if (strlen(context->profiles[context->index - 1].encodname) == 0
+					&& context->index > 0
+					&& context->index <= context->profsize)
+			strncpy(context->profiles[context->index - 1].encodname, txt, 20 - 1);
 	}
 
 	if (strcasecmp("Width", label) == 0 && txt)
 	{
 		if (txt)
 			((char*) txt)[tlen] = 0;
-		if (context->index > 0 && context->index < 5)
-		{
+		if (context->index > 0 && context->index <= context->profsize)
 			sscanf(txt, "%d", &context->profiles[context->index - 1].width);
-		}
 	}
 	if (strcasecmp("Height", label) == 0 && txt)
 	{
 		if (txt)
 			((char*) txt)[tlen] = 0;
-		if (context->index > 0 && context->index < 5)
-		{
+		if (context->index > 0 && context->index <= context->profsize)
 			sscanf(txt, "%d", &context->profiles[context->index - 1].height);
-		}
+	}
+	if (strcasecmp("FrameRateLimit", label) == 0 && txt) //帧率
+	{
+		if (context->index > 0 && context->index <= context->profsize)
+			sscanf(txt, "%d", &context->profiles[context->index - 1].frameRateLimit);
+	}
+	if (strcasecmp("BitrateLimit", label) == 0 && txt) //码率
+	{
+		if (context->index > 0 && context->index <= context->profsize)
+			sscanf(txt, "%d", &context->profiles[context->index - 1].bitrateLimit);
 	}
 	if (strcasecmp(XML_LABEL_Name, label) == 0)
 	{
@@ -1097,25 +1317,41 @@ static void _xml_GetProfilesResponse(const char *xmllabel, int llen,
 }
 
 int Onvif_MediaService_GetProfiles(const char *mediaUrl, const char *user,
-			const char *pass, struct OnvifDeviceProfiles profiles[5])
+			const char *pass,
+			struct OnvifDeviceProfiles **profiles,
+			int *profsize)
 {
 	int ret = 0;
 	char *xmlstr = NULL;
 	int xmllen = 0;
 
 	struct OnvifGetProfilesResContext context;
-	context.profiles = profiles;
+	context.profiles = NULL;
 	context.index = 0;
-
+	context.profsize = 0;
 	ret = onvif_http_digest_post(mediaUrl, user, pass, XML_GetProfiles, &xmlstr,
 				&xmllen);
 	if (ret == 200 && xmlstr)
 	{
-		xml_label(xmlstr, _xml_GetProfilesResponse, &context);
+		//首先需要统计Profiles的数量
+		int _Profiles_size = 0;
+		xml_label2(xmlstr, _xml_GetProfilesResponse_Profiles_size, &_Profiles_size);
+		if (_Profiles_size > 0)
+		{
+			context.profiles = (struct OnvifDeviceProfiles*) calloc(_Profiles_size, sizeof(struct OnvifDeviceProfiles));
+			if (context.profiles)
+			{
+				*profsize = _Profiles_size;
+				context.profsize = _Profiles_size;
+				xml_label(xmlstr, _xml_GetProfilesResponse, &context);
+
+				*profiles = context.profiles;
+				context.profiles[0].httpRespStatus = ret;
+			}
+		}
 	}
 	if (xmlstr)
 		free(xmlstr);
-	profiles[0].httpRespStatus = ret;
 	return ret;
 }
 
@@ -1137,7 +1373,7 @@ static void xml_GetStreamUriResponse(const char *xmllabel, int llen,
 			const char *txt, int tlen, void *user)
 {
 	const char *label = strchr(xmllabel, ':');
-	char *attrib = (char *) xmllabel;
+	char *attrib = (char*) xmllabel;
 
 	if (label)
 	{
@@ -1219,6 +1455,7 @@ void OnvifURI_Decode(const char *url, char *desc, int dlen)
 		*desc = 0;
 }
 
+#if 0
 int Onvif_HttpTest(const char *url, const char *username, const char *passowrd)
 {
 	int ret;
@@ -1246,8 +1483,7 @@ int Onvif_HttpTest(const char *url, const char *username, const char *passowrd)
 
 	struct OnvifDeviceProfiles profiles[5];
 	memset(profiles, 0, sizeof(profiles));
-	ret = Onvif_MediaService_GetProfiles(mediaUrl, username, passowrd,
-				profiles);
+	ret = Onvif_MediaService_GetProfiles(mediaUrl, username, passowrd,	profiles);
 	if (ret != 200)
 	{
 		printf("onvif GetProfiles err:%d\n", ret);
@@ -1276,3 +1512,5 @@ int Onvif_HttpTest(const char *url, const char *username, const char *passowrd)
 	}
 	return ret;
 }
+
+#endif

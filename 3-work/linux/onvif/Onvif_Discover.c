@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Onvif_Discover.c
  *
  *  Created on: 2019年11月7日
@@ -20,22 +20,38 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(WIN32) || defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <Windows.h>
+#else
 #include <unistd.h>
-
 #include <netdb.h>
 #include <sys/types.h>
 #include <ifaddrs.h>
-
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <poll.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
+#include <time.h>
+#include <sys/fcntl.h>
+
+#define WSAEWOULDBLOCK EWOULDBLOCK
+#define WSAETIMEDOUT EWOULDBLOCK
+#define msleep(n)	usleep(n*1000)
+
+#endif
+
 #include <errno.h>
+
+#include "Onvif.h"
+
 #include "SOAP_Onvif.h"
 #include "uuid_build.h"
-#include "log_onvif.h"
 
 #define XML_DISCOVER_Probe_tds_Device "<?xml version=\"1.0\" encoding=\"utf-8\"?>"\
 	"<Envelope xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\" xmlns=\"http://www.w3.org/2003/05/soap-envelope\">"\
@@ -104,37 +120,7 @@ int xml_probeMatch_parse(char *buff, int len,
 	return 0;
 }
 
-uint32_t Tool_GetNetDevIPV4Str(const char *devName, char *ipstr)
-{
-	int sockfd = -1;
-	struct ifreq ifr;
-	struct sockaddr_in *addr = NULL;
-
-	memset(&ifr, 0, sizeof(struct ifreq));
-	strcpy(ifr.ifr_name, devName);
-	addr = (struct sockaddr_in *) &ifr.ifr_addr;
-	addr->sin_family = AF_INET;
-
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sockfd == -1)
-	{
-		perror("create socket error!\n");
-		return -1;
-	}
-
-	if (ioctl(sockfd, SIOCGIFADDR, &ifr) == 0)
-	{
-		if (ipstr)
-			inet_ntop(AF_INET, &addr->sin_addr, ipstr, 20);
-
-		close(sockfd);
-		return addr->sin_addr.s_addr;
-	}
-	close(sockfd);
-	return -1;
-}
-
-static int socket_bind2(const char *devname, int port)
+static int socket_bind_udp(const char* ipaddress, int port)
 {
 	struct sockaddr_in saddr;
 	int sockfd;
@@ -146,19 +132,20 @@ static int socket_bind2(const char *devname, int port)
 	saddr.sin_family = AF_INET;
 	saddr.sin_port = ntohs(port);
 	//saddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	saddr.sin_addr.s_addr = Tool_GetNetDevIPV4Str(devname, NULL);
+	saddr.sin_addr.s_addr = inet_addr(ipaddress); // Tool_GetNetDevIPV4Str(devname, NULL);
 
 	int opt = 1;
-	ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *) &opt,
-				sizeof(opt)); //设置为可重复使用
+	ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt,
+		sizeof(opt)); //设置为可重复使用
 
-	opt = 1;
-	ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+	//opt = 1;
+	//ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 	//广播设置:能发送广播
 	opt = 1;
-	ret = setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, (const char*) &opt,
-				sizeof(opt));
-	ret = bind(sockfd, (struct sockaddr*) &saddr, sizeof(saddr));
+	ret = setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, (const char*)&opt,
+		sizeof(opt));
+
+	ret = bind(sockfd, (struct sockaddr*)&saddr, sizeof(saddr));
 	if (ret < 0)
 	{
 		close(sockfd);
@@ -167,23 +154,25 @@ static int socket_bind2(const char *devname, int port)
 	return sockfd;
 }
 
-void Onvif_DiscoverAll(int timeoutsec,
-			void (*bkfun)(void *context, const char *ipaddress, uint32_t s_addr,
-						struct OnvifDeviceProbeMatch *probe), void *context)
+
+void Onvif_DiscoverAll(int timeoutsec, const char *myip, 
+			void (*bkfun)(void *context, const char *ipaddress, uint32_t ser_addr, struct OnvifDeviceProbeMatch *probe),
+			void *context)
 {
 	struct sockaddr_in recvaddr;
 	struct sockaddr_in broadcastaddr;
 	char recvips[20];
 	struct OnvifDeviceProbeMatch probe;
 
-	int sockfd;
+	SOCKET sockfd;
 	int ret = 0;
 	char uuid[37];
 	char buff[5100];
 
-	memset(&probe, 0, sizeof(struct OnvifDeviceProbeMatch));
 
-	sockfd = socket_bind2("eth0", 3702);
+	memset(&probe, 0, sizeof(struct OnvifDeviceProbeMatch));
+	sockfd = socket_bind_udp(myip, 3702);
+
 	if (sockfd < 0)
 	{
 		fprintf(stderr, "port is exists bind 3702(Onvif)\n");
@@ -218,31 +207,34 @@ void Onvif_DiscoverAll(int timeoutsec,
 		}
 	}
 
-	struct pollfd fds;
-	fds.fd = sockfd;
-	fds.events = POLLIN; // 普通或优先级带数据可读
+	//struct pollfd fds;
+	//fds.fd = sockfd;
+	//fds.events = POLLIN; // 普通或优先级带数据可读
+	
+	time_t ms_start= time(NULL);
+	time_t ms_use = 0;
 
 	while (1)
 	{
-		ret = poll(&fds, 1, 1000 * timeoutsec);
-		if (-1 == ret)
-		{
-			perror("poll()");
-			break;
-		}
-		if (ret == 0)
-		{
-			break;
-		}
-		if (POLLIN == (fds.revents & POLLIN))
 		{
 			socklen_t recvaddrlen = sizeof(recvaddr);
 			memset(buff, 0, sizeof(buff));
+			memset(&recvaddr, 0, sizeof(recvaddr));
+			ms_use = time(NULL) - ms_start;
+			if (ms_use > (uint64_t)(timeoutsec))
+				break;
 
 			ret = recvfrom(sockfd, buff, sizeof(buff), 0,
 						(struct sockaddr *) &recvaddr, &recvaddrlen);
 			if (ret <= 0)
-				continue;
+			{
+				if (WSAEWOULDBLOCK == GetSockError() || WSAETIMEDOUT== GetSockError()) {
+					//阻塞
+					msleep(50);					
+					continue;
+				}
+				break;
+			}
 
 			inet_ntop(AF_INET, &recvaddr.sin_addr.s_addr, recvips,
 						sizeof(recvips));
@@ -254,14 +246,14 @@ void Onvif_DiscoverAll(int timeoutsec,
 			//OnvifDeviceProbeMatch_clear(&probe);
 		}
 	}
-	close(sockfd);
+	closesocket(sockfd);
 }
 
 int socket_raw_udp(const char *devname)
 {
-	struct ifreq ifr;
+	//struct ifreq ifr;
 	int fd;
-	int ret;
+	int ret=0;
 
 	fd = socket(AF_INET, SOCK_RAW, IPPROTO_UDP);
 	if (fd < 0)
@@ -270,9 +262,9 @@ int socket_raw_udp(const char *devname)
 					strerror(errno));
 		return -1;
 	}
-	memset(&ifr, 0, sizeof(ifr));
-	strcpy(ifr.ifr_name, devname);
-	ret = ioctl(fd, SIOCGIFINDEX, &ifr);
+	//memset(&ifr, 0, sizeof(ifr));
+	//strcpy(ifr.ifr_name, devname);
+	//ret = ioctl(fd, SIOCGIFINDEX, &ifr);
 
 	if (ret)
 	{
@@ -284,11 +276,9 @@ int socket_raw_udp(const char *devname)
 	return fd;
 }
 
-#include <linux/ip.h>
-#include <linux/udp.h>
-
 static int udp_packet_parse(char *buff, int len)
 {
+#if 0
 	struct iphdr *pack_ip = (struct iphdr*) buff;
 	struct udphdr *pack_udp = NULL;
 	uint8_t *udp_data = NULL;
@@ -312,6 +302,7 @@ static int udp_packet_parse(char *buff, int len)
 	if (sport == 3702)
 		printf("udp %s:%d->%s:%d, len:%d, %s\n", sip, sport, dip, dport,
 					udp_data_len, udp_data);
+#endif
 	return 0;
 }
 
@@ -346,11 +337,32 @@ static int udp_packet_parse(char *buff, int len)
  </env:Body>
  </env:Envelope>
  ***********/
+//非阻塞模式
+static inline int _socket_nonblock(SOCKET fd, int flag)
+{
+#ifdef _MSC_VER
+	unsigned long ul = flag;
+	return ioctlsocket(fd, FIONBIO, (unsigned long*)&ul);    //设置成非阻塞模式
+#else
+	int opt = fcntl(fd, F_GETFL, 0);
+	if (opt == -1)
+	{
+		return -1;
+	}
+	if (flag)
+		opt |= O_NONBLOCK;
+	else
+		opt &= ~O_NONBLOCK;
+
+	return fcntl(fd, F_SETFL, opt);
+#endif
+}
+#if 1
 int Onvif_DiscoverIp(const char *ip, struct OnvifDeviceProbeMatch *probe)
 {
-	int sockfd;
+	SOCKET sockfd;
 	//int udpfd;
-	char buff[10240];
+	char buff[10240] = { 0 };
 	char uuid[37];
 	struct sockaddr_in dscAddr;
 	int ret;
@@ -358,25 +370,21 @@ int Onvif_DiscoverIp(const char *ip, struct OnvifDeviceProbeMatch *probe)
 
 	memset(probe, 0, sizeof(struct OnvifDeviceProbeMatch));
 
-	sockfd = socket_bind2("eth0", 0);
-	//udpfd = socket_raw_udp("eth0");
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 	memset(&dscAddr, 0, sizeof(dscAddr));
-
 	dscAddr.sin_family = AF_INET; //255.255.255.255 广播
 	dscAddr.sin_port = htons(3702);
 	dscAddr.sin_addr.s_addr = inet_addr(ip); //htonl(INADDR_BROADCAST);
 
 	uuid_build(uuid);
 	snprintf(buff, sizeof(buff) - 1, XML_DISCOVER_Probe_tds_Device, uuid);
-	sendto(sockfd, buff, strlen(buff), 0, (const struct sockaddr *) &dscAddr,
-				sizeof(dscAddr));
+	sendto(sockfd, buff, strlen(buff), 0, (const struct sockaddr *) &dscAddr, sizeof(dscAddr));
 
 	uuid_build(uuid);
-	snprintf(buff, sizeof(buff) - 1,
-	XML_DISCOVER_Probe_dn_NetworkVideoTransmitter, uuid);
+	memset(buff, 0, sizeof(buff));
+	snprintf(buff, sizeof(buff) - 1, XML_DISCOVER_Probe_dn_NetworkVideoTransmitter, uuid);
 
-	sendto(sockfd, buff, strlen(buff), 0, (const struct sockaddr *) &dscAddr,
-				sizeof(dscAddr));
+	sendto(sockfd, buff, strlen(buff), 0, (const struct sockaddr*)&dscAddr, sizeof(dscAddr));
 
 	{
 		struct timeval timeout;
@@ -390,7 +398,10 @@ int Onvif_DiscoverIp(const char *ip, struct OnvifDeviceProbeMatch *probe)
 		}
 	}
 
+	_socket_nonblock(sockfd, 1); //设置成非阻塞模式
+
 	char recvips[20];
+	int msleep_all = 0;
 	while (1)
 	{
 		memset(buff, 0, sizeof(buff));
@@ -399,10 +410,21 @@ int Onvif_DiscoverIp(const char *ip, struct OnvifDeviceProbeMatch *probe)
 			break;
 
 		socklen_t recvaddrlen = sizeof(dscAddr);
-		ret = recvfrom(sockfd, buff, sizeof(buff), 0,
-					(struct sockaddr *) &dscAddr, &recvaddrlen);
-		if (ret <= 0)
+
+		ret = recvfrom(sockfd, buff, sizeof(buff), 0, (struct sockaddr *) &dscAddr, &recvaddrlen);
+
+		if (ret <= 0) {
+			if (WSAEWOULDBLOCK == GetSockError() || WSAETIMEDOUT == GetSockError()) {
+				//阻塞
+				msleep(50);
+				msleep_all += 50;
+				if (msleep_all > 5 * 1000)
+					break;
+				continue;
+			}
+			//printf("recvfrom ret=%d errno=%d\r\n", ret, WSAGetLastError());
 			break;
+		}			
 		{
 			char *xml_item_end = NULL;
 
@@ -441,24 +463,28 @@ int Onvif_DiscoverIp(const char *ip, struct OnvifDeviceProbeMatch *probe)
 //		}
 	}
 	if (sockfd > 0)
-		close(sockfd);
+		closesocket(sockfd);
 	if (exists)
 		return 0;
 	return -1;
 }
 
+#endif
+
+#if 0
 struct OldAll
 {
 	void *context;
 	void (*bkfun)(void *context, uint32_t addr, const char *XAddrs);
 };
 
-void _oldAll(void *context, const char *ipaddress, uint32_t s_addr,
+void _oldAll(void *context, const char *ipaddress, uint32_t ser_addr,
 			struct OnvifDeviceProbeMatch *probe)
 {
 	struct OldAll *old = (struct OldAll*) context;
-	old->bkfun(old->context, s_addr, probe->xaddrs);
+	old->bkfun(old->context, ser_addr, probe->xaddrs);
 }
+
 
 void OnvifDiscoverAll(int timeoutsec,
 			void (*bkfun)(void *context, uint32_t addr, const char *XAddrs),
@@ -469,8 +495,7 @@ void OnvifDiscoverAll(int timeoutsec,
 	old.bkfun = bkfun;
 	Onvif_DiscoverAll(timeoutsec, _oldAll, &old);
 }
-
-#include "Onvif.h"
+#endif
 
 struct OnvifDeviceInfo
 {
@@ -481,71 +506,8 @@ struct OnvifDeviceInfo
 	char uri[5][300];
 };
 
-int OnvifGetIpcDataByURL(const char *url, const char *usename, const char *password,
-			ONVIF_IPC_DATA_S *ipcData)
-{
-	struct OnvifDeviceInfo _onvifinfo;
-	struct OnvifDeviceInfo *onvifInfo = &_onvifinfo;
-	char *serverUrl = NULL;
-	int ret;
-
-	memset(onvifInfo, 0, sizeof(_onvifinfo));
-	memset(ipcData, 0, sizeof(ONVIF_IPC_DATA_S));
-
-	strcpy(onvifInfo->mediaUrl, url);
-	if (onvifInfo->profiles[0].httpRespStatus == 0)
-	{
-		memset(onvifInfo->profiles, 0, sizeof(onvifInfo->profiles));
-		ret = Onvif_MediaService_GetProfiles(onvifInfo->mediaUrl, usename,
-					password, onvifInfo->profiles);
-		if (ret == 401)
-		{
-			log_e("onvif",
-						"Onvif_MediaService_GetProfiles %s,[%s][%s] user or passowrd err\n",
-						url, usename, password);
-			return ret;
-		}
-		if (ret != 200)
-		{
-			log_e("onvif", "Onvif_MediaService_GetProfiles err [ret=%d] %s\n", ret, onvifInfo->mediaUrl);
-			onvifInfo->profiles[0].httpRespStatus = 0;
-			return ret;
-		}
-	}
-
-	int i = 0;
-
-	for (i = 0; i < 5; i++)
-	{
-		if (strlen(onvifInfo->profiles[i].token) == 0)
-			break;
-		memset(onvifInfo->uri[i], 0, 300);
-
-		ret = Onvif_MediaServer_GetStreamUri(onvifInfo->mediaUrl, usename,
-					password, onvifInfo->profiles[i].token, onvifInfo->uri[i]);
-
-		if (ret == 200)
-		{
-			OnvifURI_Decode(onvifInfo->uri[i], onvifInfo->uri[i], 300);
-		}
-		log_i("onvif", "token:%s, uri:%s\n", onvifInfo->profiles[i].token,
-					onvifInfo->uri[i]);
-		//break;
-	}
-
-	strncpy(ipcData->url.rtspUrl, onvifInfo->uri[0], 256 - 1);
-	strncpy(ipcData->url.rtspUrlSub, onvifInfo->uri[1], 256 - 1);
-	strcpy(ipcData->devData.brand, onvifInfo->devInfo.Manufacturer);
-	strcpy(ipcData->devData.firmwareversion,
-				onvifInfo->devInfo.FirmwareVersion);
-	strcpy(ipcData->devData.model, onvifInfo->devInfo.Model);
-	strcpy(ipcData->devData.serialnumber, onvifInfo->devInfo.SerialNumber);
-
-	log_i("onvif", "IPC:[%s][%s]\n", ipcData->url.rtspUrl, ipcData->url.rtspUrlSub);
-	return ret;
-}
-
-int OnvifGetIpcDataByIp(const char *iporurl, const char *usename, const char *password,
+#if 0
+int OnvifGetIpcDataByIp(const char *ip,const  char *usename, const char *password,
 			ONVIF_IPC_DATA_S *ipcData)
 {
 	struct OnvifDeviceInfo _onvifinfo;
@@ -554,24 +516,18 @@ int OnvifGetIpcDataByIp(const char *iporurl, const char *usename, const char *pa
 	int ret;
 	memset(onvifInfo, 0, sizeof(_onvifinfo));
 	memset(ipcData, 0, sizeof(ONVIF_IPC_DATA_S));
-	const char *ip = iporurl;
-	//
-	if (strncasecmp(iporurl, "http://", strlen("http://")) == 0)
-	{
-		snprintf(onvifInfo->probe.xaddrs, 500, "%s/onvif/device_service", iporurl);
-	}
-	else
+
 	if (strlen(onvifInfo->probe.xaddrs) == 0)
 	{
 		ret = Onvif_DiscoverIp(ip, &onvifInfo->probe);
 		if (ret < 0)
 		{
-			log_w("onvif", "设备不存在:%d, %s,%s,%s,尝试默认地址\n", ret, ip, usename, password);
+			//PRINTF_WARN("设备不存在:%d, %s,%s,%s,尝试默认地址\n", ret, ip, usename, password);
 			snprintf(onvifInfo->probe.xaddrs, 500, "http://%s:80/onvif/device_service", ip);
 			//return -2;
 		}
 
-		log_d("onvif", "xaddr:%s\n", onvifInfo->probe.xaddrs);
+		//PRINTF_DEBUG_0("xaddr:%s\n", onvifInfo->probe.xaddrs);
 		{
 			char *url = strchr(onvifInfo->probe.xaddrs, ' ');
 			if (url)
@@ -582,8 +538,8 @@ int OnvifGetIpcDataByIp(const char *iporurl, const char *usename, const char *pa
 	}
 	serverUrl = onvifInfo->probe.xaddrs;
 
-	log_d("onvif", "OnvifDevice:%s,%s,%s[%s]\n", ip, usename, password,
-				serverUrl);
+	//PRINTF_DEBUG_0("OnvifDevice:%s,%s,%s[%s]\n", ip, usename, password,
+	//			serverUrl);
 	//exit(1);
 	if (onvifInfo->devInfo.httpRespStatus == 0)
 	{
@@ -591,23 +547,23 @@ int OnvifGetIpcDataByIp(const char *iporurl, const char *usename, const char *pa
 					&onvifInfo->devInfo);
 		if (ret == 401)
 		{
-			log_w("onvif",
-						"onvif GetDeviceInformation %s,[%s][%s] user or passowrd err\n",
-						ip, usename, password);
-			//return ret;
+			//PRINTF_WARN(
+			//			"onvif GetDeviceInformation %s,[%s][%s] user or passowrd err\n",
+			//			ip, usename, password);
+			return ret;
 		}
 		if (ret != 200)
 		{
-			log_w("onvif", "onvif GetDeviceInformation err,ret=%d, %s,%s,%s\n", ret,
-						ip, usename, password);
+			//PRINTF_WARN("onvif GetDeviceInformation,ret=%d, %s,%s,%s\n", ret,
+			//			ip, usename, password);
 			onvifInfo->devInfo.httpRespStatus = 0;			//下次获取
-			//return ret;
+			return ret;
 		}
-		if (ret == 200)
-			log_d("onvif", "Onvif info, %s, mode:%s,mau:%s,fmv:%s, sid:%s\n", ip,
-						onvifInfo->devInfo.Model, onvifInfo->devInfo.Manufacturer,
-						onvifInfo->devInfo.FirmwareVersion,
-						onvifInfo->devInfo.SerialNumber);
+
+		//PRINTF_DEBUG_0("Onvif info, %s, mode:%s,mau:%s,fmv:%s, sid:%s\n", ip,
+		//			onvifInfo->devInfo.Model, onvifInfo->devInfo.Manufacturer,
+		//			onvifInfo->devInfo.FirmwareVersion,
+		//			onvifInfo->devInfo.SerialNumber);
 	}
 
 	ret = Onvif_GetCapabilities_Media(serverUrl, usename, password,
@@ -615,16 +571,10 @@ int OnvifGetIpcDataByIp(const char *iporurl, const char *usename, const char *pa
 
 	if (ret != 200)
 	{
-		log_e("onvif", "Onvif_GetCapabilities_Media %s, not get media url\n", ip);
+		//PRINTF_ERR("Onvif_GetCapabilities_Media %s, not get media url\n", ip);
 		return ret;
 	}
-
-	log_d("onvif", "media url:%s\n", onvifInfo->mediaUrl);
-
-//	if (strcmp(onvifInfo->mediaUrl, serverUrl) != 0)
-//	{
-//		strcpy(onvifInfo->mediaUrl, "http://e4105f8dd3a28f182b5440ab500713e6.192.168.1.241.80.oms.lxvision.com:8100/onvif/service");
-//	}
+	//PRINTF_DEBUG_0("media url:%s\n", onvifInfo->mediaUrl);
 
 	if (onvifInfo->profiles[0].httpRespStatus == 0)
 	{
@@ -633,19 +583,19 @@ int OnvifGetIpcDataByIp(const char *iporurl, const char *usename, const char *pa
 					password, onvifInfo->profiles);
 		if (ret == 401)
 		{
-			log_e("onvif",
-						"Onvif_MediaService_GetProfiles %s,[%s][%s] user or passowrd err\n",
-						ip, usename, password);
+			//PRINTF_ERR(
+			//			"Onvif_MediaService_GetProfiles %s,[%s][%s] user or passowrd err\n",
+			//			ip, usename, password);
 			return ret;
 		}
 		if (ret != 200)
 		{
-			log_e("onvif", "Onvif_MediaService_GetProfiles err [ret=%d] %s\n", ret, onvifInfo->mediaUrl);
+			//PRINTF_ERR("Onvif_MediaService_GetProfiles[ret=%d] %sn", ret, ip);
 			onvifInfo->profiles[0].httpRespStatus = 0;
 			return ret;
 		}
-	}
 
+	}
 	int i = 0;
 
 	for (i = 0; i < 5; i++)
@@ -661,20 +611,20 @@ int OnvifGetIpcDataByIp(const char *iporurl, const char *usename, const char *pa
 		{
 			OnvifURI_Decode(onvifInfo->uri[i], onvifInfo->uri[i], 300);
 		}
-		log_i("onvif", "token:%s, uri:%s\n", onvifInfo->profiles[i].token,
-					onvifInfo->uri[i]);
+		//PRINTF_ALWAYS("token:%s, uri:%s\n", onvifInfo->profiles[i].token,
+		//			onvifInfo->uri[i]);
 		//break;
 	}
 
 	strncpy(ipcData->url.rtspUrl, onvifInfo->uri[0], 256 - 1);
 	strncpy(ipcData->url.rtspUrlSub, onvifInfo->uri[1], 256 - 1);
 	strcpy(ipcData->devData.brand, onvifInfo->devInfo.Manufacturer);
-	strcpy(ipcData->devData.firmwareversion,
-				onvifInfo->devInfo.FirmwareVersion);
+	strcpy(ipcData->devData.firmwareversion, onvifInfo->devInfo.FirmwareVersion);
 	strcpy(ipcData->devData.model, onvifInfo->devInfo.Model);
 	strcpy(ipcData->devData.serialnumber, onvifInfo->devInfo.SerialNumber);
 
-	log_i("onvif", "IPC:[%s][%s]\n", ipcData->url.rtspUrl, ipcData->url.rtspUrlSub);
+	//PRINTF_ALWAYS("IPC:[%s][%s]\n", ipcData->url.rtspUrl, ipcData->url.rtspUrlSub);
 	return ret;
 }
 
+#endif
