@@ -293,4 +293,21 @@ void MD5_Final(unsigned char *result, MD5_CTX *ctx)
   memset(ctx, 0, sizeof(*ctx));
 }
 
+
+#include <stdarg.h>
+
+void MD5UpdateStr(MD5_CTX* context, ...)
+{
+	va_list v;
+	va_start(v, context);
+	while (1)
+	{
+		const char *str = va_arg(v, const char*);
+		if (!str)
+			break;
+		MD5Update(context, (unsigned char *)str, strlen(str));
+	}
+	va_end(v);
+}
+
 #endif
